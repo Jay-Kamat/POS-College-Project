@@ -1,0 +1,16 @@
+{
+  "name": "openwa",
+  "version": "1.0.0",
+  "description": "NestJS / Express WhatsApp Gateway for POS & Billing System",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.3"
+  }
+}

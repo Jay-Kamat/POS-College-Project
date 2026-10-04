@@ -1,0 +1,116 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return get(/databases/$(database)/documents/RolesAndPermissions/$(request.auth.uid)).data.Role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (getUserRole() == 'Admin' || request.auth.token.role == 'Admin');
+    }
+    
+    function isCashier() {
+      return isAuthenticated() && (getUserRole() == 'Cashier' || request.auth.token.role == 'Cashier');
+    }
+    
+    function isInventoryManager() {
+      return isAuthenticated() && (getUserRole() == 'Inventory Manager' || request.auth.token.role == 'Inventory Manager');
+    }
+
+    match /Stores/{storeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /TaxRates/{taxRateId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /Settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /RolesAndPermissions/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /Products/{productId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isInventoryManager();
+      allow delete: if false;
+    }
+    
+    match /ProductCategory/{catId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isInventoryManager();
+      allow delete: if false;
+    }
+
+    match /Vendors/{vendorId} {
+      allow read, write: if isAdmin() || isInventoryManager();
+      allow delete: if false;
+    }
+    
+    match /PurchaseOrderHeader/{poId} {
+      allow read, write: if isAdmin() || isInventoryManager();
+    }
+    
+    match /PurchaseOrderDetails/{detailId} {
+      allow read, write: if isAdmin() || isInventoryManager();
+    }
+    
+    match /MaterialInwardHeader/{inwardId} {
+      allow read, write: if isAdmin() || isInventoryManager();
+    }
+    
+    match /MaterialInwardDetails/{detailId} {
+      allow read, write: if isAdmin() || isInventoryManager();
+    }
+    
+    match /MaterialInwardBarcodes/{barcodeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isInventoryManager();
+    }
+    
+    match /Customers/{customerId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || isCashier();
+      allow delete: if false;
+    }
+    
+    match /BucketHeader/{bucketId} {
+      allow read, write: if isAdmin() || isCashier();
+    }
+    
+    match /BucketDetails/{detailId} {
+      allow read, write: if isAdmin() || isCashier();
+    }
+
+    match /InvoiceHeader/{invoiceId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isCashier()) && request.resource.data.RecordStatus == 0;
+      allow update: if isAdmin() 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['RecordStatus', 'CancellationReason', 'Updated', 'UpdatedId'])
+        && request.resource.data.RecordStatus == 1;
+      allow delete: if false;
+    }
+    
+    match /InvoiceDetails/{detailId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isCashier()) && request.resource.data.RecordStatus == 0;
+      allow update, delete: if false;
+    }
+
+    match /Counters/{counterId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
