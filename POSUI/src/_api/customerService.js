@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Customer Directory Service Layer
 const INITIAL_CUSTOMERS = [
   {
@@ -49,39 +51,97 @@ const saveStoredCustomers = (customers) => {
 };
 
 export const customerService = {
-  getCustomers: async (search = '') => {
-    const list = getStoredCustomers().filter(c => c.RecordStatus === 0);
-    if (!search) return list;
-    const lower = search.toLowerCase();
-    return list.filter(c => 
-      c.Name.toLowerCase().includes(lower) || 
-      c.MobileNumber.includes(search)
-    );
+  getCustomers: async (searchTerm = '') => {
+    try {
+      const data = await apiClient.get(`/api/customers${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`);
+      if (Array.isArray(data)) {
+        saveStoredCustomers(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback to local customers:', e.message);
+    }
+
+    let list = getStoredCustomers().filter(c => c.RecordStatus === 0);
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      list = list.filter(c => 
+        c.Name.toLowerCase().includes(term) || 
+        c.MobileNumber.includes(term) ||
+        (c.GstNumber && c.GstNumber.toLowerCase().includes(term))
+      );
+    }
+    return list;
   },
 
   getCustomerByMobile: async (mobile) => {
-    const list = getStoredCustomers();
-    return list.find(c => c.MobileNumber === mobile && c.RecordStatus === 0) || null;
+    const cleanMobile = mobile.replace(/[^0-9]/g, '');
+    try {
+      return await apiClient.get(`/api/customers/by-mobile/${cleanMobile}`);
+    } catch (e) {
+      const list = getStoredCustomers();
+      return list.find(c => c.MobileNumber === cleanMobile && c.RecordStatus === 0) || null;
+    }
   },
 
   createCustomer: async (customerData) => {
+    try {
+      const created = await apiClient.post('/api/customers', customerData);
+      const list = getStoredCustomers();
+      list.unshift(created);
+      saveStoredCustomers(list);
+      return created;
+    } catch (e) {
+      const list = getStoredCustomers();
+      const newCustomer = {
+        Id: `cust_${Date.now()}`,
+        ...customerData,
+        TotalVisits: 1,
+        TotalSpend: 0.00,
+        RecordStatus: 0,
+        Created: new Date().toISOString(),
+        Updated: new Date().toISOString()
+      };
+      list.unshift(newCustomer);
+      saveStoredCustomers(list);
+      return newCustomer;
+    }
+  },
+
+  updateCustomer: async (id, customerData) => {
+    try {
+      const updated = await apiClient.put(`/api/customers/${id}`, customerData);
+      const list = getStoredCustomers();
+      const index = list.findIndex(c => c.Id === id);
+      if (index !== -1) {
+        list[index] = updated;
+        saveStoredCustomers(list);
+      }
+      return updated;
+    } catch (e) {
+      const list = getStoredCustomers();
+      const index = list.findIndex(c => c.Id === id);
+      if (index !== -1) {
+        list[index] = { ...list[index], ...customerData, Updated: new Date().toISOString() };
+        saveStoredCustomers(list);
+        return list[index];
+      }
+      throw new Error('Customer not found');
+    }
+  },
+
+  deleteCustomer: async (id) => {
+    try {
+      await apiClient.delete(`/api/customers/${id}`);
+    } catch (e) {}
     const list = getStoredCustomers();
-    const newCustomer = {
-      Id: `cust_${Date.now()}`,
-      Name: customerData.Name,
-      MobileNumber: customerData.MobileNumber,
-      GstNumber: customerData.GstNumber || '',
-      State: customerData.State || 'Maharashtra',
-      Country: 'India',
-      TotalVisits: 1,
-      TotalSpend: 0,
-      RecordStatus: 0,
-      Created: new Date().toISOString(),
-      Updated: new Date().toISOString()
-    };
-    list.unshift(newCustomer);
-    saveStoredCustomers(list);
-    return newCustomer;
+    const item = list.find(c => c.Id === id);
+    if (item) {
+      item.RecordStatus = 1;
+      saveStoredCustomers(list);
+      return true;
+    }
+    return false;
   }
 };
 

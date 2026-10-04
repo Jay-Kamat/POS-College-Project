@@ -1,4 +1,4 @@
-// Reports & Analytics Service Layer
+import apiClient from './apiClient';
 import invoiceService from './invoiceService';
 import productService from './productService';
 import vendorService from './vendorService';
@@ -6,9 +6,36 @@ import vendorService from './vendorService';
 export const reportService = {
   // 1. Daily Sales Report
   getDailySalesReport: async ({ startDate, endDate } = {}) => {
+    try {
+      const data = await apiClient.get('/api/reports/daily-sales');
+      if (data && data.invoices) {
+        // Group invoices by date string (YYYY-MM-DD)
+        const grouped = {};
+        data.invoices.forEach(inv => {
+          const dateKey = inv.Date.split('T')[0];
+          if (!grouped[dateKey]) {
+            grouped[dateKey] = {
+              Date: dateKey,
+              InvoicesCount: 0,
+              CashTotal: 0,
+              UpiTotal: 0,
+              TaxCollected: 0,
+              GrandTotal: 0
+            };
+          }
+          grouped[dateKey].InvoicesCount += 1;
+          if (inv.ModeOfPayment === 0) grouped[dateKey].CashTotal += inv.Amount;
+          else grouped[dateKey].UpiTotal += inv.Amount;
+          grouped[dateKey].TaxCollected += (inv.Cgst || 0) + (inv.Sgst || 0) + (inv.Igst || 0);
+          grouped[dateKey].GrandTotal += inv.Amount;
+        });
+        return Object.values(grouped).sort((a, b) => b.Date.localeCompare(a.Date));
+      }
+    } catch (e) {
+      console.warn('Fallback daily sales report:', e.message);
+    }
+
     const invoices = await invoiceService.getInvoices({ status: 'active' });
-    
-    // Group invoices by date string (YYYY-MM-DD)
     const grouped = {};
     invoices.forEach(inv => {
       const dateKey = inv.Date.split('T')[0];
@@ -34,10 +61,14 @@ export const reportService = {
 
   // 2. Vendor-Wise Sales Report
   getVendorWiseSalesReport: async () => {
+    try {
+      const data = await apiClient.get('/api/reports/vendor-wise-sale');
+      if (Array.isArray(data) && data.length > 0) return data;
+    } catch (e) {}
+
     const invoices = await invoiceService.getInvoices({ status: 'active' });
     const vendors = await vendorService.getVendors();
 
-    // Map vendor item sales
     const reportData = vendors.map(v => {
       let itemsSold = 0;
       let totalQty = 0;
@@ -45,7 +76,6 @@ export const reportService = {
 
       invoices.forEach(inv => {
         inv.Items.forEach(item => {
-          // Associate items by category / supplier logic
           if (
             (v.VendorCode === 'VND-101' && item.ProductName.includes('Milk')) ||
             (v.VendorCode === 'VND-102' && (item.ProductName.includes('Bread') || item.ProductName.includes('Cake'))) ||
@@ -73,10 +103,14 @@ export const reportService = {
 
   // 3. Vendor-Wise Expired Stock Report
   getVendorWiseExpiredStockReport: async () => {
+    try {
+      const data = await apiClient.get('/api/reports/vendor-wise-expired-stock');
+      if (Array.isArray(data) && data.length > 0) return data;
+    } catch (e) {}
+
     const products = await productService.getProducts();
     const vendors = await vendorService.getVendors();
 
-    // Find items nearing or past expiry
     const expiredList = [];
     products.filter(p => p.IsExpDate).forEach((p, idx) => {
       const assignedVendor = vendors[idx % vendors.length];
@@ -97,6 +131,27 @@ export const reportService = {
     });
 
     return expiredList;
+  },
+
+  // 4. Dashboard Summary KPIs
+  getDashboardKPIs: async () => {
+    try {
+      const data = await apiClient.get('/api/reports/dashboard');
+      if (data) return data;
+    } catch (e) {
+      console.warn('Fallback dashboard KPIs:', e.message);
+    }
+
+    const invoices = await invoiceService.getInvoices();
+    const products = await productService.getProducts();
+
+    return {
+      totalSales: invoices.reduce((sum, inv) => sum + (inv.Amount || 0), 0),
+      invoiceCount: invoices.length,
+      lowStockCount: products.filter(p => (p.StockQuantity || 0) < 20).length,
+      expiredCount: products.filter(p => p.IsExpDate && p.Days <= 0).length,
+      recentInvoices: invoices.slice(0, 5)
+    };
   }
 };
 

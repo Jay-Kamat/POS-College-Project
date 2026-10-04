@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Users & RBAC Matrix Service Layer
 const INITIAL_USERS = [
   {
@@ -46,6 +48,15 @@ const INITIAL_PERMISSIONS_MATRIX = [
 
 export const userService = {
   getUsers: async () => {
+    try {
+      const data = await apiClient.get('/api/users');
+      if (Array.isArray(data)) {
+        localStorage.setItem('pos_users', JSON.stringify(data));
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback users:', e.message);
+    }
     const local = localStorage.getItem('pos_users');
     if (local) {
       try { return JSON.parse(local); } catch (e) {}
@@ -54,19 +65,63 @@ export const userService = {
   },
 
   inviteUser: async (userData) => {
+    try {
+      const created = await apiClient.post('/api/users', userData);
+      const list = await userService.getUsers();
+      list.push(created);
+      localStorage.setItem('pos_users', JSON.stringify(list));
+      return created;
+    } catch (e) {
+      const list = await userService.getUsers();
+      const newUser = {
+        Id: `user_${Date.now()}`,
+        ...userData,
+        Status: 'Active',
+        LastLogin: 'Never'
+      };
+      list.push(newUser);
+      localStorage.setItem('pos_users', JSON.stringify(list));
+      return newUser;
+    }
+  },
+
+  updateUserRole: async (userId, role) => {
+    try {
+      const updated = await apiClient.put(`/api/users/${userId}/role`, { role });
+      const list = await userService.getUsers();
+      const idx = list.findIndex(u => u.Id === userId);
+      if (idx !== -1) {
+        list[idx] = updated;
+        localStorage.setItem('pos_users', JSON.stringify(list));
+      }
+      return updated;
+    } catch (e) {
+      const list = await userService.getUsers();
+      const idx = list.findIndex(u => u.Id === userId);
+      if (idx !== -1) {
+        list[idx].Role = role;
+        localStorage.setItem('pos_users', JSON.stringify(list));
+        return list[idx];
+      }
+      throw new Error('User not found');
+    }
+  },
+
+  deleteUser: async (userId) => {
+    try {
+      await apiClient.delete(`/api/users/${userId}`);
+    } catch (e) {}
     const list = await userService.getUsers();
-    const newUser = {
-      Id: `user_${Date.now()}`,
-      ...userData,
-      Status: 'Active',
-      LastLogin: 'Never'
-    };
-    list.push(newUser);
-    localStorage.setItem('pos_users', JSON.stringify(list));
-    return newUser;
+    const updated = list.filter(u => u.Id !== userId);
+    localStorage.setItem('pos_users', JSON.stringify(updated));
+    return true;
   },
 
   getPermissionsMatrix: async () => {
+    try {
+      const data = await apiClient.get('/api/users/permissions-matrix');
+      if (Array.isArray(data)) return data;
+    } catch (e) {}
     const local = localStorage.getItem('pos_permissions_matrix');
     if (local) {
       try { return JSON.parse(local); } catch (e) {}
@@ -74,8 +129,15 @@ export const userService = {
     return INITIAL_PERMISSIONS_MATRIX;
   },
 
-  savePermissionsMatrix: async (matrix) => {
-    localStorage.setItem('pos_permissions_matrix', JSON.stringify(matrix));
+  updatePermission: async (moduleIndex, roleKey, actionKey, value) => {
+    try {
+      await apiClient.put('/api/users/permissions-matrix', { moduleIndex, roleKey, actionKey, value });
+    } catch (e) {}
+    const matrix = await userService.getPermissionsMatrix();
+    if (matrix[moduleIndex] && matrix[moduleIndex][roleKey]) {
+      matrix[moduleIndex][roleKey][actionKey] = value;
+      localStorage.setItem('pos_permissions_matrix', JSON.stringify(matrix));
+    }
     return matrix;
   }
 };

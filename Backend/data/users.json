@@ -1,0 +1,32 @@
+[
+  {
+    "Id": "user_01",
+    "Name": "Jay Sharma",
+    "Email": "admin@dailymart.in",
+    "Role": "Admin",
+    "Store": "DailyMart Express (Mumbai)",
+    "Status": "Active",
+    "LastLogin": "2026-10-04, 07:45 PM",
+    "RecordStatus": 0
+  },
+  {
+    "Id": "user_02",
+    "Name": "Pooja Nair",
+    "Email": "cashier1@dailymart.in",
+    "Role": "Cashier",
+    "Store": "DailyMart Express (Mumbai)",
+    "Status": "Active",
+    "LastLogin": "2026-10-04, 06:12 PM",
+    "RecordStatus": 0
+  },
+  {
+    "Id": "user_03",
+    "Name": "Vikram Singh",
+    "Email": "inventory@dailymart.in",
+    "Role": "Inventory Manager",
+    "Store": "DailyMart Express (Mumbai)",
+    "Status": "Active",
+    "LastLogin": "2026-10-04, 05:30 PM",
+    "RecordStatus": 0
+  }
+]

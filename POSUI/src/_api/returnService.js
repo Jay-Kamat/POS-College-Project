@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Vendor Material Returns Service Layer
 const INITIAL_RETURN_REASONS = [
   { Id: 'ret_01', Name: 'Expired Goods' },
@@ -57,28 +59,57 @@ const saveStoredReturns = (returns) => {
 
 export const returnService = {
   getReturnReasons: async () => {
+    try {
+      const data = await apiClient.get('/api/material-returns/reasons');
+      if (Array.isArray(data)) return data;
+    } catch (e) {
+      console.warn('Fallback return reasons:', e.message);
+    }
     return INITIAL_RETURN_REASONS;
   },
 
-  getReturnNotes: async () => {
+  getReturns: async () => {
+    try {
+      const data = await apiClient.get('/api/material-returns');
+      if (Array.isArray(data)) {
+        saveStoredReturns(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback returns:', e.message);
+    }
     return getStoredReturns().filter(r => r.RecordStatus === 0);
   },
 
-  createReturnNote: async (returnData) => {
-    const list = getStoredReturns();
-    const newNote = {
-      Id: `mrn_${Date.now()}`,
-      DocumentNumber: `MRN-2026-${String(list.length + 14).padStart(5, '0')}`,
-      ...returnData,
-      Date: new Date().toISOString(),
-      Status: 'Dispatched to Supplier',
-      RecordStatus: 0,
-      Created: new Date().toISOString(),
-      Updated: new Date().toISOString()
-    };
-    list.unshift(newNote);
-    saveStoredReturns(list);
-    return newNote;
+  createReturn: async (returnData) => {
+    try {
+      const created = await apiClient.post('/api/material-returns', returnData);
+      const list = getStoredReturns();
+      list.unshift(created);
+      saveStoredReturns(list);
+      return created;
+    } catch (e) {
+      const list = getStoredReturns();
+      const reasons = INITIAL_RETURN_REASONS;
+      const reasonObj = reasons.find(r => r.Id === returnData.MaterialReturnId);
+      const docNum = `MRN-2026-${String(list.length + 14).padStart(5, '0')}`;
+
+      const newReturn = {
+        Id: `mrn_${Date.now()}`,
+        DocumentNumber: docNum,
+        Date: new Date().toISOString(),
+        ...returnData,
+        ReturnReason: reasonObj ? reasonObj.Name : 'Expired Goods',
+        Status: 'Credit Note Pending',
+        RecordStatus: 0,
+        Created: new Date().toISOString(),
+        Updated: new Date().toISOString()
+      };
+
+      list.unshift(newReturn);
+      saveStoredReturns(list);
+      return newReturn;
+    }
   }
 };
 

@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Invoice Service Layer (Atomic sequence, GST calculation, Soft cancellation)
 const INITIAL_INVOICES = [
   {
@@ -63,93 +65,123 @@ const saveStoredInvoices = (invoices) => {
 };
 
 export const invoiceService = {
-  getInvoices: async ({ searchTerm = '', status = 'all' } = {}) => {
-    let list = getStoredInvoices();
-    if (status === 'active') {
-      list = list.filter(i => i.RecordStatus === 0);
-    } else if (status === 'cancelled') {
-      list = list.filter(i => i.RecordStatus === 1);
+  getInvoices: async ({ startDate, endDate, search, paymentMode } = {}) => {
+    try {
+      const params = new URLSearchParams();
+      if (startDate) params.append('startDate', startDate);
+      if (endDate) params.append('endDate', endDate);
+      if (search) params.append('search', search);
+      if (paymentMode !== undefined && paymentMode !== '' && paymentMode !== 'all') {
+        params.append('paymentMode', paymentMode);
+      }
+      const data = await apiClient.get(`/api/invoices?${params.toString()}`);
+      if (Array.isArray(data)) {
+        saveStoredInvoices(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback to local invoices:', e.message);
     }
-    if (searchTerm) {
-      const lower = searchTerm.toLowerCase();
-      list = list.filter(i => 
-        i.DocumentNumber.toLowerCase().includes(lower) ||
-        (i.CustomerName && i.CustomerName.toLowerCase().includes(lower)) ||
-        (i.MobileNumber && i.MobileNumber.includes(searchTerm))
+
+    let list = getStoredInvoices().filter(inv => inv.RecordStatus === 0);
+    if (startDate) {
+      const start = new Date(startDate).getTime();
+      list = list.filter(inv => new Date(inv.Date).getTime() >= start);
+    }
+    if (endDate) {
+      const end = new Date(endDate).getTime() + 86400000;
+      list = list.filter(inv => new Date(inv.Date).getTime() <= end);
+    }
+    if (paymentMode !== undefined && paymentMode !== '' && paymentMode !== 'all') {
+      list = list.filter(inv => String(inv.ModeOfPayment) === String(paymentMode));
+    }
+    if (search) {
+      const term = search.toLowerCase();
+      list = list.filter(inv =>
+        inv.DocumentNumber.toLowerCase().includes(term) ||
+        (inv.CustomerName && inv.CustomerName.toLowerCase().includes(term)) ||
+        (inv.MobileNumber && inv.MobileNumber.includes(term))
       );
     }
     return list;
   },
 
   getInvoiceById: async (id) => {
-    const list = getStoredInvoices();
-    return list.find(i => i.Id === id) || null;
+    try {
+      return await apiClient.get(`/api/invoices/${id}`);
+    } catch (e) {
+      const list = getStoredInvoices();
+      return list.find(inv => inv.Id === id) || null;
+    }
   },
 
-  createInvoiceFromCart: async (cartState, storeInfo) => {
-    const list = getStoredInvoices();
-    
-    // Generate sequential DocumentNumber: INV-2627-000XXX
-    const nextSeq = list.length + 103;
-    const documentNumber = `INV-2627-${String(nextSeq).padStart(6, '0')}`;
+  createInvoiceFromCart: async (cart, activeStore) => {
+    try {
+      const created = await apiClient.post('/api/invoices', { cart, activeStore });
+      const list = getStoredInvoices();
+      list.unshift(created);
+      saveStoredInvoices(list);
+      return created;
+    } catch (e) {
+      console.warn('Fallback create local invoice:', e.message);
+      const list = getStoredInvoices();
+      const sequence = 101 + list.length;
+      const documentNumber = `INV-2627-${String(sequence).padStart(6, '0')}`;
 
-    const newInvoice = {
-      Id: `inv_${Date.now()}`,
-      DocumentNumber: documentNumber,
-      Date: new Date().toISOString(),
-      CustomerId: cartState.customer.id || null,
-      CustomerName: cartState.customer.name || 'Walk-in Customer',
-      MobileNumber: cartState.customer.mobileNumber || '',
-      CustomerGst: cartState.customer.gstin || '',
-      CustomerState: cartState.customer.state || storeInfo.state,
-      StoreId: storeInfo.id,
-      StoreName: storeInfo.name,
-      StoreAddress: storeInfo.address,
-      StoreGst: storeInfo.gstin,
-      StoreFssai: storeInfo.fssai,
-      StorePhone: storeInfo.phone,
-      Amount: cartState.grandTotal,
-      Subtotal: cartState.subtotal,
-      Cgst: cartState.cgst,
-      Sgst: cartState.sgst,
-      Igst: cartState.igst,
-      RoundOff: cartState.roundOff,
-      ModeOfPayment: cartState.paymentMode, // 0 = Cash, 1 = UPI
-      IsPaymentReceived: cartState.isPaymentReceived,
-      IsShareReceiptThroughSms: !!cartState.customer.mobileNumber,
-      RecordStatus: 0,
-      Items: cartState.items.map(i => ({
-        ProductId: i.id,
-        ProductName: i.name,
-        Quantity: i.quantity,
-        Rate: i.rate,
-        Cgst: i.cgst,
-        Sgst: i.sgst,
-        Igst: i.igst,
-        Total: i.amount
-      })),
-      Created: new Date().toISOString(),
-      Updated: new Date().toISOString()
-    };
+      const newInvoice = {
+        Id: `inv_${Date.now()}`,
+        DocumentNumber: documentNumber,
+        Date: new Date().toISOString(),
+        CustomerId: cart.customer.id || null,
+        CustomerName: cart.customer.name || 'Walk-in Customer',
+        MobileNumber: cart.customer.mobileNumber || '',
+        StoreId: activeStore?.id || 'store_mum_01',
+        StoreName: activeStore?.name || 'DailyMart Express',
+        Subtotal: cart.subtotal,
+        Cgst: cart.cgst,
+        Sgst: cart.sgst,
+        Igst: cart.igst || 0,
+        RoundOff: cart.roundOff,
+        Amount: cart.grandTotal,
+        ModeOfPayment: cart.paymentMode,
+        IsPaymentReceived: cart.isPaymentReceived,
+        IsShareReceiptThroughSms: cart.sendWhatsApp,
+        RecordStatus: 0,
+        Created: new Date().toISOString(),
+        Updated: new Date().toISOString(),
+        CreatedId: 'user_admin_01',
+        UpdatedId: 'user_admin_01',
+        Items: cart.items.map(item => ({
+          ProductId: item.id,
+          ProductName: item.name,
+          Quantity: item.quantity,
+          Rate: item.cost,
+          Total: (item.cost * item.quantity)
+        }))
+      };
 
-    list.unshift(newInvoice);
-    saveStoredInvoices(list);
-    return newInvoice;
+      list.unshift(newInvoice);
+      saveStoredInvoices(list);
+      return newInvoice;
+    }
   },
 
   cancelInvoice: async (id, reason) => {
+    try {
+      await apiClient.post(`/api/invoices/${id}/cancel`, { reason });
+    } catch (e) {
+      console.warn('Fallback cancel local invoice:', e.message);
+    }
     const list = getStoredInvoices();
-    const invoice = list.find(i => i.Id === id);
-    if (!invoice) throw new Error('Invoice not found');
-
-    // Soft cancellation
-    invoice.RecordStatus = 1;
-    invoice.CancellationReason = reason;
-    invoice.CancelledAt = new Date().toISOString();
-    invoice.Updated = new Date().toISOString();
-
-    saveStoredInvoices(list);
-    return invoice;
+    const item = list.find(inv => inv.Id === id);
+    if (item) {
+      item.RecordStatus = 1;
+      item.CancellationReason = reason;
+      item.Updated = new Date().toISOString();
+      saveStoredInvoices(list);
+      return true;
+    }
+    return false;
   }
 };
 

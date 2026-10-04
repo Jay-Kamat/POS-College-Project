@@ -1,0 +1,44 @@
+[
+  {
+    "Id": "vnd_01",
+    "VendorCode": "VND-101",
+    "Name": "Fresh Dairy Co-operative Ltd",
+    "Address": "Sector 4, MIDC Industrial Area",
+    "City": "Pune",
+    "Pin": "411001",
+    "Email": "orders@freshdairy.com",
+    "MobileNumber": "+91 98220 12345",
+    "Note": "Net 15 days payment terms",
+    "RecordStatus": 0,
+    "Created": "2026-07-01T10:00:00.000Z",
+    "Updated": "2026-10-04T10:00:00.000Z"
+  },
+  {
+    "Id": "vnd_02",
+    "VendorCode": "VND-102",
+    "Name": "Golden Crust Bakers LLP",
+    "Address": "Plot 88, Andheri West",
+    "City": "Mumbai",
+    "Pin": "400053",
+    "Email": "dispatch@goldencrust.in",
+    "MobileNumber": "+91 98210 98765",
+    "Note": "Daily morning delivery by 7 AM",
+    "RecordStatus": 0,
+    "Created": "2026-07-05T10:00:00.000Z",
+    "Updated": "2026-10-04T10:00:00.000Z"
+  },
+  {
+    "Id": "vnd_03",
+    "VendorCode": "VND-103",
+    "Name": "Royal Agro Commodities Pvt Ltd",
+    "Address": "Grain Market Yard",
+    "City": "Nagpur",
+    "Pin": "440008",
+    "Email": "sales@royalagro.com",
+    "MobileNumber": "+91 98230 45678",
+    "Note": "Bulk staples supplier",
+    "RecordStatus": 0,
+    "Created": "2026-07-10T10:00:00.000Z",
+    "Updated": "2026-10-04T10:00:00.000Z"
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "Id": "tax_0",
+    "Name": "GST 0% (Exempt)",
+    "IGST": 0,
+    "CGST": 0,
+    "SGST": 0,
+    "RecordStatus": 0
+  },
+  {
+    "Id": "tax_5",
+    "Name": "GST 5% Standard",
+    "IGST": 5,
+    "CGST": 2.5,
+    "SGST": 2.5,
+    "RecordStatus": 0
+  },
+  {
+    "Id": "tax_12",
+    "Name": "GST 12% Standard",
+    "IGST": 12,
+    "CGST": 6,
+    "SGST": 6,
+    "RecordStatus": 0
+  },
+  {
+    "Id": "tax_18",
+    "Name": "GST 18% Standard",
+    "IGST": 18,
+    "CGST": 9,
+    "SGST": 9,
+    "RecordStatus": 0
+  },
+  {
+    "Id": "tax_28",
+    "Name": "GST 28% Luxury",
+    "IGST": 28,
+    "CGST": 14,
+    "SGST": 14,
+    "RecordStatus": 0
+  }
+]

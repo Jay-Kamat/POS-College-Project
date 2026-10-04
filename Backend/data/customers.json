@@ -1,0 +1,41 @@
+[
+  {
+    "Id": "cust_01",
+    "Name": "Jay Sharma",
+    "MobileNumber": "9876543210",
+    "GstNumber": "",
+    "State": "Maharashtra",
+    "Country": "India",
+    "TotalVisits": 14,
+    "TotalSpend": 4250,
+    "RecordStatus": 0,
+    "Created": "2026-08-10T10:00:00.000Z",
+    "Updated": "2026-10-04T15:00:00.000Z"
+  },
+  {
+    "Id": "cust_02",
+    "Name": "Priya Patel",
+    "MobileNumber": "9820011223",
+    "GstNumber": "27AABCZ1234P1ZR",
+    "State": "Maharashtra",
+    "Country": "India",
+    "TotalVisits": 6,
+    "TotalSpend": 8900,
+    "RecordStatus": 0,
+    "Created": "2026-08-15T10:00:00.000Z",
+    "Updated": "2026-10-04T15:00:00.000Z"
+  },
+  {
+    "Id": "cust_03",
+    "Name": "Rahul Verma",
+    "MobileNumber": "9819988776",
+    "GstNumber": "",
+    "State": "Gujarat",
+    "Country": "India",
+    "TotalVisits": 2,
+    "TotalSpend": 620,
+    "RecordStatus": 0,
+    "Created": "2026-09-05T10:00:00.000Z",
+    "Updated": "2026-10-04T15:00:00.000Z"
+  }
+]

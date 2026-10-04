@@ -1,0 +1,77 @@
+[
+  {
+    "Id": "inv_101",
+    "DocumentNumber": "INV-2627-000101",
+    "Date": "2026-10-04T11:28:29.627Z",
+    "CustomerId": "cust_01",
+    "CustomerName": "Jay Sharma",
+    "MobileNumber": "9876543210",
+    "StoreId": "store_mum_01",
+    "StoreName": "DailyMart Express",
+    "Amount": 155,
+    "Subtotal": 145,
+    "Cgst": 4.88,
+    "Sgst": 4.88,
+    "Igst": 0,
+    "RoundOff": 0.24,
+    "ModeOfPayment": 1,
+    "IsPaymentReceived": true,
+    "IsShareReceiptThroughSms": true,
+    "RecordStatus": 0,
+    "Created": "2026-10-04T11:28:29.627Z",
+    "Updated": "2026-10-04T11:28:29.627Z",
+    "Items": [
+      {
+        "ProductId": "prd_01",
+        "ProductName": "Cow Milk 500ml",
+        "Quantity": 2,
+        "Rate": 30,
+        "Cgst": 1.5,
+        "Sgst": 1.5,
+        "Total": 63
+      },
+      {
+        "ProductId": "prd_03",
+        "ProductName": "Cold Coffee 200ml",
+        "Quantity": 2,
+        "Rate": 45,
+        "Cgst": 4.05,
+        "Sgst": 4.05,
+        "Total": 98.1
+      }
+    ]
+  },
+  {
+    "Id": "inv_102",
+    "DocumentNumber": "INV-2627-000102",
+    "Date": "2026-10-04T13:28:29.627Z",
+    "CustomerId": "cust_02",
+    "CustomerName": "Priya Patel",
+    "MobileNumber": "9820011223",
+    "StoreId": "store_mum_01",
+    "StoreName": "DailyMart Express",
+    "Amount": 413,
+    "Subtotal": 350,
+    "Cgst": 31.5,
+    "Sgst": 31.5,
+    "Igst": 0,
+    "RoundOff": 0,
+    "ModeOfPayment": 0,
+    "IsPaymentReceived": true,
+    "IsShareReceiptThroughSms": false,
+    "RecordStatus": 0,
+    "Created": "2026-10-04T13:28:29.627Z",
+    "Updated": "2026-10-04T13:28:29.627Z",
+    "Items": [
+      {
+        "ProductId": "prd_05",
+        "ProductName": "Dark Chocolate Cake 500g",
+        "Quantity": 1,
+        "Rate": 350,
+        "Cgst": 31.5,
+        "Sgst": 31.5,
+        "Total": 413
+      }
+    ]
+  }
+]

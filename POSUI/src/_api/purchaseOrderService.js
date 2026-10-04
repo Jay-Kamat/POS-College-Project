@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Purchase Orders Service Layer
 const INITIAL_POS = [
   {
@@ -58,25 +60,77 @@ const saveStoredPOs = (pos) => {
 };
 
 export const purchaseOrderService = {
-  getPurchaseOrders: async () => {
-    return getStoredPOs().filter(p => p.RecordStatus === 0);
+  getPurchaseOrders: async (filters = {}) => {
+    try {
+      const params = new URLSearchParams();
+      if (filters.status) params.append('status', filters.status);
+      if (filters.vendorId) params.append('vendorId', filters.vendorId);
+      const data = await apiClient.get(`/api/purchase-orders?${params.toString()}`);
+      if (Array.isArray(data)) {
+        saveStoredPOs(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback to local POs:', e.message);
+    }
+
+    let list = getStoredPOs().filter(p => p.RecordStatus === 0);
+    if (filters.status && filters.status !== 'All') {
+      list = list.filter(p => p.Status.toLowerCase() === filters.status.toLowerCase());
+    }
+    if (filters.vendorId) {
+      list = list.filter(p => p.VendorId === filters.vendorId);
+    }
+    return list;
   },
 
   createPurchaseOrder: async (poData) => {
-    const list = getStoredPOs();
-    const newPO = {
-      Id: `po_${Date.now()}`,
-      DocumentNumber: `PO-2026-${String(list.length + 45).padStart(5, '0')}`,
-      ...poData,
-      Date: new Date().toISOString(),
-      Status: 'Sent',
-      RecordStatus: 0,
-      Created: new Date().toISOString(),
-      Updated: new Date().toISOString()
-    };
-    list.unshift(newPO);
-    saveStoredPOs(list);
-    return newPO;
+    try {
+      const created = await apiClient.post('/api/purchase-orders', poData);
+      const list = getStoredPOs();
+      list.unshift(created);
+      saveStoredPOs(list);
+      return created;
+    } catch (e) {
+      const list = getStoredPOs();
+      const docNum = `PO-2026-${String(list.length + 46).padStart(5, '0')}`;
+      const newPO = {
+        Id: `po_${Date.now()}`,
+        DocumentNumber: docNum,
+        ...poData,
+        Date: new Date().toISOString(),
+        Status: 'Sent',
+        RecordStatus: 0,
+        Created: new Date().toISOString(),
+        Updated: new Date().toISOString()
+      };
+      list.unshift(newPO);
+      saveStoredPOs(list);
+      return newPO;
+    }
+  },
+
+  updatePurchaseOrderStatus: async (id, status) => {
+    try {
+      const updated = await apiClient.put(`/api/purchase-orders/${id}/status`, { status });
+      const list = getStoredPOs();
+      const index = list.findIndex(p => p.Id === id);
+      if (index !== -1) {
+        list[index] = updated;
+        saveStoredPOs(list);
+      }
+      return updated;
+    } catch (e) {
+      const list = getStoredPOs();
+      const index = list.findIndex(p => p.Id === id);
+      if (index !== -1) {
+        list[index].Status = status;
+        list[index].Updated = new Date().toISOString();
+        saveStoredPOs(list);
+        return list[index];
+      }
+      throw new Error('Purchase order not found');
+    }
   }
 };
 

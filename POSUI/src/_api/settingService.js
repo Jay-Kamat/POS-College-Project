@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Settings, Store Profile & Tax Rates Service Layer
 const INITIAL_TAX_RATES = [
   { Id: 'tax_0', Name: 'GST 0% (Exempt)', IGST: 0.0, CGST: 0.0, SGST: 0.0, RecordStatus: 0 },
@@ -27,6 +29,12 @@ const INITIAL_STORE_PROFILE = {
 
 export const settingService = {
   getStoreProfile: async () => {
+    try {
+      const data = await apiClient.get('/api/settings/store-profile');
+      if (data && data.Name) return data;
+    } catch (e) {
+      console.warn('Fallback store profile:', e.message);
+    }
     const local = localStorage.getItem('pos_store_profile');
     if (local) {
       try { return JSON.parse(local); } catch (e) {}
@@ -35,11 +43,23 @@ export const settingService = {
   },
 
   updateStoreProfile: async (data) => {
-    localStorage.setItem('pos_store_profile', JSON.stringify(data));
-    return data;
+    try {
+      const updated = await apiClient.put('/api/settings/store-profile', data);
+      localStorage.setItem('pos_store_profile', JSON.stringify(updated));
+      return updated;
+    } catch (e) {
+      localStorage.setItem('pos_store_profile', JSON.stringify(data));
+      return data;
+    }
   },
 
   getTaxRates: async () => {
+    try {
+      const data = await apiClient.get('/api/tax-rates');
+      if (Array.isArray(data) && data.length > 0) return data;
+    } catch (e) {
+      console.warn('Fallback tax rates:', e.message);
+    }
     const local = localStorage.getItem('pos_tax_rates');
     if (local) {
       try { return JSON.parse(local); } catch (e) {}
@@ -48,15 +68,19 @@ export const settingService = {
   },
 
   addTaxRate: async (taxData) => {
-    const local = await settingService.getTaxRates();
-    const newRate = {
-      Id: `tax_${Date.now()}`,
-      ...taxData,
-      RecordStatus: 0
-    };
-    local.push(newRate);
-    localStorage.setItem('pos_tax_rates', JSON.stringify(local));
-    return newRate;
+    try {
+      return await apiClient.post('/api/tax-rates', taxData);
+    } catch (e) {
+      const local = await settingService.getTaxRates();
+      const newRate = {
+        Id: `tax_${Date.now()}`,
+        ...taxData,
+        RecordStatus: 0
+      };
+      local.push(newRate);
+      localStorage.setItem('pos_tax_rates', JSON.stringify(local));
+      return newRate;
+    }
   }
 };
 

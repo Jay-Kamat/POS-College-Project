@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Product & Category Data Access Service Layer
 const INITIAL_CATEGORIES = [
   { Id: 'cat_all', Name: 'All Items' },
@@ -59,14 +61,14 @@ const INITIAL_PRODUCTS = [
     ProductNumber: '200100104004',
     Name: 'Royal Basmati Rice 1kg',
     Cost: 110.00,
-    Ingredients: 'Aged long-grain basmati rice',
-    Notes: 'Store in cool dry place',
+    Ingredients: 'Aged Long Grain Basmati',
+    Notes: 'Grade A premium rice',
     IsExpDate: false,
     Days: null,
     CategoryId: 'cat_staples',
     TaxRateId: 'tax_5',
     TaxPercent: 5,
-    StockQuantity: 62,
+    StockQuantity: 60,
     RecordStatus: 0
   },
   {
@@ -74,14 +76,14 @@ const INITIAL_PRODUCTS = [
     ProductNumber: '200100105005',
     Name: 'Dark Chocolate Cake 500g',
     Cost: 350.00,
-    Ingredients: 'Cocoa, butter, eggs, flour',
-    Notes: 'Bakery fresh specialty',
+    Ingredients: 'Cocoa, dark chocolate, flour, sugar',
+    Notes: 'Eggless celebration cake',
     IsExpDate: true,
-    Days: 4,
+    Days: 2,
     CategoryId: 'cat_bakery',
     TaxRateId: 'tax_18',
     TaxPercent: 18,
-    StockQuantity: 8,
+    StockQuantity: 12,
     RecordStatus: 0
   },
   {
@@ -131,7 +133,6 @@ const INITIAL_PRODUCTS = [
   }
 ];
 
-// Local state caching helper
 const getStoredProducts = () => {
   const local = localStorage.getItem('pos_products');
   if (local) {
@@ -147,16 +148,33 @@ const saveStoredProducts = (products) => {
 
 export const productService = {
   getCategories: async () => {
+    try {
+      const data = await apiClient.get('/api/categories');
+      if (Array.isArray(data) && data.length > 0) return data;
+    } catch (e) {
+      console.warn('Fallback to local categories:', e.message);
+    }
     return INITIAL_CATEGORIES;
   },
 
   getProducts: async ({ categoryId = 'cat_all', searchTerm = '' } = {}) => {
+    try {
+      const params = new URLSearchParams();
+      if (categoryId && categoryId !== 'cat_all') params.append('categoryId', categoryId);
+      if (searchTerm) params.append('searchTerm', searchTerm);
+      const data = await apiClient.get(`/api/products?${params.toString()}`);
+      if (Array.isArray(data)) {
+        saveStoredProducts(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback to local products:', e.message);
+    }
+
     let list = getStoredProducts().filter(p => p.RecordStatus === 0);
-    
     if (categoryId && categoryId !== 'cat_all') {
       list = list.filter(p => p.CategoryId === categoryId);
     }
-    
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
       list = list.filter(p => 
@@ -164,83 +182,117 @@ export const productService = {
         p.ProductNumber.toLowerCase().includes(lower)
       );
     }
-    
     return list;
   },
 
+  getProductById: async (id) => {
+    try {
+      return await apiClient.get(`/api/products/${id}`);
+    } catch (e) {
+      const list = getStoredProducts();
+      return list.find(p => p.Id === id) || null;
+    }
+  },
+
   getProductByBarcode: async (barcode) => {
-    const list = getStoredProducts();
     let clean = String(barcode || '').trim();
     if (!clean) return null;
 
-    // Check if QR code payload is JSON
     if (clean.startsWith('{') && clean.endsWith('}')) {
       try {
         const parsed = JSON.parse(clean);
         clean = String(parsed.barcode || parsed.ProductNumber || parsed.id || parsed.Id || clean).trim();
-      } catch (e) {
-        // Continue with raw clean string
-      }
+      } catch (e) {}
     }
 
-    // Check if payload is a URI (e.g. pos://product/200100101001)
     if (clean.includes('/')) {
       const parts = clean.split('/');
       clean = parts[parts.length - 1];
     }
 
-    return list.find(p => 
-      (p.ProductNumber === clean || p.Id === clean || String(p.ProductNumber).toLowerCase() === clean.toLowerCase()) && 
-      p.RecordStatus === 0
-    ) || null;
+    try {
+      return await apiClient.get(`/api/products/barcode/${encodeURIComponent(clean)}`);
+    } catch (e) {
+      // Local fallback
+      const list = getStoredProducts();
+      return list.find(p => 
+        (p.ProductNumber === clean || p.Id === clean || String(p.ProductNumber).toLowerCase() === clean.toLowerCase()) && 
+        p.RecordStatus === 0
+      ) || null;
+    }
   },
 
   createProduct: async (productData) => {
-    const list = getStoredProducts();
-    const newProduct = {
-      Id: `prd_${Date.now()}`,
-      ProductNumber: productData.ProductNumber || `200100${Date.now().toString().slice(-6)}`,
-      Name: productData.Name,
-      Cost: parseFloat(productData.Cost),
-      Ingredients: productData.Ingredients || '',
-      Notes: productData.Notes || '',
-      IsExpDate: !!productData.IsExpDate,
-      Days: productData.IsExpDate ? parseInt(productData.Days, 10) : null,
-      CategoryId: productData.CategoryId || 'cat_dairy',
-      TaxRateId: productData.TaxRateId || 'tax_5',
-      TaxPercent: productData.TaxPercent || 5,
-      StockQuantity: parseInt(productData.StockQuantity || 50, 10),
-      RecordStatus: 0,
-      Created: new Date().toISOString(),
-      Updated: new Date().toISOString(),
-      CreatedId: 'user_admin_01',
-      UpdatedId: 'user_admin_01'
-    };
-    list.unshift(newProduct);
-    saveStoredProducts(list);
-    return newProduct;
+    try {
+      const created = await apiClient.post('/api/products', productData);
+      const list = getStoredProducts();
+      list.unshift(created);
+      saveStoredProducts(list);
+      return created;
+    } catch (e) {
+      console.warn('Fallback create local product:', e.message);
+      const list = getStoredProducts();
+      const newProduct = {
+        Id: `prd_${Date.now()}`,
+        ProductNumber: productData.ProductNumber || `200100${Date.now().toString().slice(-6)}`,
+        Name: productData.Name,
+        Cost: parseFloat(productData.Cost),
+        Ingredients: productData.Ingredients || '',
+        Notes: productData.Notes || '',
+        IsExpDate: !!productData.IsExpDate,
+        Days: productData.IsExpDate ? parseInt(productData.Days, 10) : null,
+        CategoryId: productData.CategoryId || 'cat_dairy',
+        TaxRateId: productData.TaxRateId || 'tax_5',
+        TaxPercent: productData.TaxPercent || 5,
+        StockQuantity: parseInt(productData.StockQuantity || 50, 10),
+        RecordStatus: 0,
+        Created: new Date().toISOString(),
+        Updated: new Date().toISOString(),
+        CreatedId: 'user_admin_01',
+        UpdatedId: 'user_admin_01'
+      };
+      list.unshift(newProduct);
+      saveStoredProducts(list);
+      return newProduct;
+    }
   },
 
   updateProduct: async (id, productData) => {
-    const list = getStoredProducts();
-    const index = list.findIndex(p => p.Id === id);
-    if (index !== -1) {
-      list[index] = {
-        ...list[index],
-        ...productData,
-        Updated: new Date().toISOString()
-      };
-      saveStoredProducts(list);
-      return list[index];
+    try {
+      const updated = await apiClient.put(`/api/products/${id}`, productData);
+      const list = getStoredProducts();
+      const index = list.findIndex(p => p.Id === id);
+      if (index !== -1) {
+        list[index] = updated;
+        saveStoredProducts(list);
+      }
+      return updated;
+    } catch (e) {
+      const list = getStoredProducts();
+      const index = list.findIndex(p => p.Id === id);
+      if (index !== -1) {
+        list[index] = {
+          ...list[index],
+          ...productData,
+          Updated: new Date().toISOString()
+        };
+        saveStoredProducts(list);
+        return list[index];
+      }
+      throw new Error('Product not found');
     }
-    throw new Error('Product not found');
   },
 
   softDeleteProduct: async (id) => {
+    try {
+      await apiClient.delete(`/api/products/${id}`);
+    } catch (e) {
+      console.warn('Fallback local softDeleteProduct:', e.message);
+    }
     const list = getStoredProducts();
     const item = list.find(p => p.Id === id);
     if (item) {
-      item.RecordStatus = 1; // Soft delete
+      item.RecordStatus = 1;
       item.Updated = new Date().toISOString();
       saveStoredProducts(list);
       return true;

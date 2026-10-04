@@ -1,3 +1,5 @@
+import apiClient from './apiClient';
+
 // Vendors Service Layer
 const INITIAL_VENDORS = [
   {
@@ -52,23 +54,86 @@ const saveStoredVendors = (vendors) => {
 };
 
 export const vendorService = {
-  getVendors: async () => {
-    return getStoredVendors().filter(v => v.RecordStatus === 0);
+  getVendors: async (searchTerm = '') => {
+    try {
+      const data = await apiClient.get(`/api/vendors${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`);
+      if (Array.isArray(data)) {
+        saveStoredVendors(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback to local vendors:', e.message);
+    }
+
+    let list = getStoredVendors().filter(v => v.RecordStatus === 0);
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      list = list.filter(v => 
+        v.Name.toLowerCase().includes(term) || 
+        v.VendorCode.toLowerCase().includes(term) ||
+        v.City.toLowerCase().includes(term)
+      );
+    }
+    return list;
   },
 
   createVendor: async (vendorData) => {
+    try {
+      const created = await apiClient.post('/api/vendors', vendorData);
+      const list = getStoredVendors();
+      list.unshift(created);
+      saveStoredVendors(list);
+      return created;
+    } catch (e) {
+      const list = getStoredVendors();
+      const newVendor = {
+        Id: `vnd_${Date.now()}`,
+        VendorCode: vendorData.VendorCode || `VND-${100 + list.length + 1}`,
+        ...vendorData,
+        RecordStatus: 0,
+        Created: new Date().toISOString(),
+        Updated: new Date().toISOString()
+      };
+      list.unshift(newVendor);
+      saveStoredVendors(list);
+      return newVendor;
+    }
+  },
+
+  updateVendor: async (id, vendorData) => {
+    try {
+      const updated = await apiClient.put(`/api/vendors/${id}`, vendorData);
+      const list = getStoredVendors();
+      const index = list.findIndex(v => v.Id === id);
+      if (index !== -1) {
+        list[index] = updated;
+        saveStoredVendors(list);
+      }
+      return updated;
+    } catch (e) {
+      const list = getStoredVendors();
+      const index = list.findIndex(v => v.Id === id);
+      if (index !== -1) {
+        list[index] = { ...list[index], ...vendorData, Updated: new Date().toISOString() };
+        saveStoredVendors(list);
+        return list[index];
+      }
+      throw new Error('Vendor not found');
+    }
+  },
+
+  deleteVendor: async (id) => {
+    try {
+      await apiClient.delete(`/api/vendors/${id}`);
+    } catch (e) {}
     const list = getStoredVendors();
-    const newVendor = {
-      Id: `vnd_${Date.now()}`,
-      VendorCode: `VND-${Math.floor(100 + Math.random() * 900)}`,
-      ...vendorData,
-      RecordStatus: 0,
-      Created: new Date().toISOString(),
-      Updated: new Date().toISOString()
-    };
-    list.unshift(newVendor);
-    saveStoredVendors(list);
-    return newVendor;
+    const item = list.find(v => v.Id === id);
+    if (item) {
+      item.RecordStatus = 1;
+      saveStoredVendors(list);
+      return true;
+    }
+    return false;
   }
 };
 
