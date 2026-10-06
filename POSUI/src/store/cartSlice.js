@@ -1,14 +1,16 @@
 import { createSlice } from '@reduxjs/toolkit';
 
+const initialCustomer = {
+  name: 'Walk-in Customer',
+  mobileNumber: '',
+  state: 'Maharashtra',
+  gstin: ''
+};
+
 const initialState = {
   bucketId: 'bkt_temp_01',
   bucketNumber: 'BKT-01',
-  customer: {
-    name: 'Jay Sharma',
-    mobileNumber: '9876543210',
-    state: 'Maharashtra',
-    gstin: ''
-  },
+  customer: { ...initialCustomer },
   items: [],
   subtotal: 0,
   cgst: 0,
@@ -78,18 +80,56 @@ export const cartSlice = createSlice({
   reducers: {
     addItem: (state, action) => {
       const product = action.payload;
-      const existing = state.items.find(i => i.id === product.id);
+      if (!product) return;
+
+      // Extract product ID supporting both PascalCase and camelCase from backend
+      const productId = String(product.Id || product.id || product.ProductNumber || product.productNumber || '');
+      if (!productId) return;
+
+      // Determine stock quantity available
+      let availableStock = 999999;
+      if (product.StockQuantity !== undefined && product.StockQuantity !== null) {
+        availableStock = parseInt(product.StockQuantity, 10);
+      } else if (product.stockQuantity !== undefined && product.stockQuantity !== null) {
+        availableStock = parseInt(product.stockQuantity, 10);
+      }
+
+      // If item is completely out of stock, reject adding to cart
+      if (availableStock <= 0) {
+        return;
+      }
+
+      const productNum = String(product.ProductNumber || product.productNumber || '');
+      const existing = state.items.find(i => String(i.id) === productId || (productNum && String(i.productNumber) === productNum));
       if (existing) {
-        existing.quantity += (product.quantity || 1);
+        const itemMaxStock = existing.stockQuantity !== undefined ? existing.stockQuantity : availableStock;
+        const requestedAdd = product.quantity || 1;
+        // Do not exceed available stock in cart!
+        if (existing.quantity >= itemMaxStock) {
+          return;
+        }
+        existing.quantity = Math.min(existing.quantity + requestedAdd, itemMaxStock);
       } else {
+        const cost = product.Cost !== undefined
+          ? parseFloat(product.Cost)
+          : (product.cost !== undefined ? parseFloat(product.cost) : (product.rate || 0));
+
+        const tax = product.TaxPercent !== undefined
+          ? parseFloat(product.TaxPercent)
+          : (product.taxPercent !== undefined ? parseFloat(product.taxPercent) : 5);
+
+        const initialQty = Math.min(product.quantity || 1, availableStock);
+        if (initialQty <= 0) return;
+
         state.items.push({
-          id: product.id,
-          productNumber: product.productNumber || product.ProductNumber,
-          name: product.name || product.Name,
-          rate: product.cost || product.Cost || 50,
-          quantity: product.quantity || 1,
-          taxPercent: product.taxPercent || 5,
-          expiryDate: product.expiryDate || product.ExpiryDate || null,
+          id: productId,
+          productNumber: String(product.ProductNumber || product.productNumber || productId),
+          name: product.Name || product.name || 'Product',
+          rate: cost,
+          quantity: initialQty,
+          stockQuantity: availableStock,
+          taxPercent: tax,
+          expiryDate: product.ExpiryDate || product.expiryDate || null,
           cgst: 0,
           sgst: 0,
           igst: 0,
@@ -100,22 +140,27 @@ export const cartSlice = createSlice({
     },
     updateQuantity: (state, action) => {
       const { id, quantity } = action.payload;
-      const item = state.items.find(i => i.id === id);
+      const item = state.items.find(i => String(i.id) === String(id));
       if (item) {
         if (quantity <= 0) {
-          state.items = state.items.filter(i => i.id !== id);
+          state.items = state.items.filter(i => String(i.id) !== String(id));
         } else {
-          item.quantity = quantity;
+          const maxStock = item.stockQuantity !== undefined ? item.stockQuantity : 999999;
+          item.quantity = Math.min(quantity, maxStock);
         }
       }
       recalculateTotals(state);
     },
     removeItem: (state, action) => {
-      state.items = state.items.filter(i => i.id !== action.payload);
+      state.items = state.items.filter(i => String(i.id) !== String(action.payload));
       recalculateTotals(state);
     },
     setCustomer: (state, action) => {
       state.customer = { ...state.customer, ...action.payload };
+      recalculateTotals(state);
+    },
+    resetCustomer: (state) => {
+      state.customer = { ...initialCustomer };
       recalculateTotals(state);
     },
     setPaymentMode: (state, action) => {
@@ -140,13 +185,38 @@ export const cartSlice = createSlice({
     },
     clearCart: (state) => {
       state.items = [];
+      state.customer = { ...initialCustomer };
       state.amountReceived = 0;
       state.changeDue = 0;
       state.isPaymentReceived = false;
       recalculateTotals(state);
     },
     loadBucket: (state, action) => {
-      return { ...state, ...action.payload };
+      const loaded = action.payload || {};
+      state.bucketId = loaded.bucketId || state.bucketId || 'bkt_temp_01';
+      state.bucketNumber = loaded.bucketNumber || 'BKT-01';
+      state.customer = loaded.customer ? { ...loaded.customer } : { ...initialCustomer };
+      state.items = Array.isArray(loaded.items)
+        ? loaded.items.map(item => ({
+            ...item,
+            id: String(item.id || item.Id || item.ProductNumber || ''),
+            productNumber: String(item.productNumber || item.ProductNumber || item.id || ''),
+            name: item.name || item.Name || 'Product',
+            rate: parseFloat(item.rate !== undefined ? item.rate : (item.Cost || 0)),
+            quantity: parseInt(item.quantity || 1, 10),
+            taxPercent: parseFloat(item.taxPercent !== undefined ? item.taxPercent : (item.TaxPercent || 0)),
+            stockQuantity: item.stockQuantity !== undefined ? item.stockQuantity : (item.StockQuantity !== undefined ? item.StockQuantity : 999999),
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+            amount: 0
+          }))
+        : [];
+      state.paymentMode = loaded.paymentMode !== undefined ? loaded.paymentMode : 0;
+      state.amountReceived = loaded.amountReceived || 0;
+      state.changeDue = loaded.changeDue || 0;
+      state.isPaymentReceived = !!loaded.isPaymentReceived;
+      recalculateTotals(state);
     }
   }
 });
@@ -156,6 +226,7 @@ export const {
   updateQuantity,
   removeItem,
   setCustomer,
+  resetCustomer,
   setPaymentMode,
   setCashReceived,
   setIsPaymentReceived,

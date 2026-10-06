@@ -34,6 +34,7 @@ import {
 import purchaseOrderService from '../../../_api/purchaseOrderService';
 import vendorService from '../../../_api/vendorService';
 import materialInwardService from '../../../_api/materialInwardService';
+import { printBarcodeLabels } from '../../../utils/printService';
 
 const steps = ['Receipt Mode & PO', 'Verify Quantities & Expiry', 'Generate & Print Barcodes'];
 
@@ -274,7 +275,7 @@ export default function MaterialInward() {
                 variant="contained"
                 color="primary"
                 startIcon={<PrintIcon />}
-                onClick={() => window.print()}
+                onClick={() => printBarcodeLabels(generatedInward.Items)}
               >
                 Print Barcode Labels
               </Button>

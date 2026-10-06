@@ -151,17 +151,33 @@ export const invoiceService = {
         Updated: new Date().toISOString(),
         CreatedId: 'user_admin_01',
         UpdatedId: 'user_admin_01',
-        Items: cart.items.map(item => ({
-          ProductId: item.id,
-          ProductName: item.name,
-          Quantity: item.quantity,
-          Rate: item.cost,
-          Total: (item.cost * item.quantity)
-        }))
+        Items: cart.items.map(item => {
+          const r = parseFloat(item.rate !== undefined ? item.rate : (item.cost || 0));
+          return {
+            ProductId: item.id,
+            ProductName: item.name,
+            Quantity: item.quantity,
+            Rate: r,
+            Total: r * item.quantity
+          };
+        })
       };
 
       list.unshift(newInvoice);
       saveStoredInvoices(list);
+
+      // In offline fallback, also decrement local storage products
+      try {
+        const stored = JSON.parse(localStorage.getItem('pos_products') || '[]');
+        cart.items.forEach(ci => {
+          const p = stored.find(sp => String(sp.Id) === String(ci.id) || String(sp.ProductNumber) === String(ci.productNumber));
+          if (p) {
+            p.StockQuantity = Math.max(0, (p.StockQuantity || 0) - ci.quantity);
+          }
+        });
+        localStorage.setItem('pos_products', JSON.stringify(stored));
+      } catch (err) {}
+
       return newInvoice;
     }
   },

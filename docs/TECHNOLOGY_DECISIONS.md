@@ -1,40 +1,40 @@
-9# Architecture & Technology Decisions Record (ADR): POS & Billing System
+# Architecture & Technology Decisions Record (ADR): POS & Billing System
 
-## 1. Stack Evaluation & Rationale
+## 1. Core Stack Evaluation & Technical Rationale
 
 | Layer / Technology | Choice | Alternatives Evaluated | Rationale for Choice | Known Trade-offs |
 | :--- | :--- | :--- | :--- | :--- |
-| **Frontend Framework** | **React 18** | Next.js, Vue 3, Angular | Broad ecosystem, Mantis Admin UI compatibility, robust Formik + Yup support. | Client-side bundle size; requires openssl-legacy flag in legacy toolchain. |
-| **UI Component Library** | **Mantis Admin (MUI v5)** | Ant Design, Tailwind CSS, Chakra UI | Enterprise styling, rich accessible components, built-in dark mode, customizable theme. | Heavy styling runtime; requires disciplined component usage. |
-| **State Management** | **Redux Toolkit (RTK)** | Zustand, Recoil, React Context | Deterministic state transitions, Redux DevTools for checkout debugging, multi-tab bucket state. | Minor boilerplate compared to lightweight hooks. |
-| **Form Management** | **Formik + Yup** | React Hook Form, Zod | Declarative schema validation, built-in touched/error tracking, seamless MUI integration. | Slightly higher re-render frequency on massive forms. |
-| **Data Tables** | **React Table (TanStack)** | Material-UI DataGrid, AG Grid | Lightweight, sticky column support, custom renderers, client-side pagination and CSV streaming. | Requires custom markup bindings. |
-| **Visual Charts** | **ApexCharts** | Chart.js, Recharts | Rich interactive time-series charts, donut payment splits, built-in responsive controls. | SVG render overhead on large datasets. |
-| **Invoice PDF Engine** | **`@react-pdf/renderer`**| jsPDF, html2canvas | Native client-side PDF vector rendering, pixel-perfect A4 GST tax invoice formatting. | Node stream polyfills required in browser. |
-| **Database & Auth** | **Cloud Firestore & Firebase Auth** | Supabase, PostgreSQL, MongoDB | Sub-second WebSocket listeners, native offline IndexedDB sync, serverless scale. | **No SQL JOINs; document read pricing; reporting aggregation constraints.** |
-| **WhatsApp Gateway** | **OpenWA (NestJS + Baileys)** | Official Cloud API, Twilio | Zero per-message fee for local Indian store SIM; direct QR code linking. | High risk of session disconnection; potential Meta anti-spam ban. |
+| **Backend Runtime** | **Node.js 22 LTS** | Node.js 20, Go, Python | Native Fetch, performance improvements, long-term support window, full TypeScript compatibility. | Single-threaded event loop requires non-blocking IO discipline. |
+| **Backend Framework** | **NestJS** | Express, Fastify, Koa | Architectural consistency with `OpenWA`; modular DI, decorators for RBAC guards, automatic Swagger generation. | Additional architectural boilerplate compared to bare Express. |
+| **Primary Database** | **PostgreSQL 16** | Cloud Firestore, MySQL, MongoDB | Strict ACID guarantees, row-level locking (`SELECT ... FOR UPDATE`), GIN trigram indexing, `citext`, `pgcrypto`. | Requires dedicated database management and connection pool tuning. |
+| **ORM & Migrations** | **Prisma** | TypeORM, Drizzle, Kysely | Type-safe query builder, declarative schema, automated migration generation, raw SQL escape hatch for DDL triggers. | Generated client adds minor build overhead; raw SQL required for complex constraints. |
+| **Financial Arithmetic** | **`decimal.js`** | Native JS `Number`, `bignumber.js` | Absolute precision for Indian GST splits, tax-inclusive backward math, and round-offs; zero IEEE 754 rounding drift. | Requires explicit method chaining (`.plus()`, `.times()`, `.toFixed(2)`). |
+| **Password Hashing** | **`argon2id`** | bcrypt, scrypt, PBKDF2 | Winner of Password Hashing Competition; maximum resistance against GPU and side-channel attacks. | Higher CPU/memory consumption per hash during login. |
+| **Structured Logging** | **`nestjs-pino`** | Winston, Morgan, Bunyan | Extreme speed (low CPU overhead), JSON output, automated PII field redaction out of the box. | Logs in raw JSON format; requires formatting pipe for local terminal reading. |
+| **Security Headers** | **`helmet`** | Manual middleware | Industry standard for injecting essential HTTP security headers (HSTS, CSP, X-Frame-Options). | Requires configuring CSP rules for Swagger UI. |
+| **Rate Limiting** | **`@nestjs/throttler`** | `express-rate-limit` | Native NestJS guard integration, customizable per-route quotas (stricter on `/auth/*`). | In-memory storage by default; multi-instance requires Redis. |
+| **Frontend Framework** | **React 18 + Vite 5** | Webpack 5, Next.js | Blazing fast HMR ($<200\text{ms}$), optimized tree-shaking, elimination of legacy OpenSSL flags. | Client-side rendering (CSR); SEO optimization requires pre-rendering if public. |
+| **Frontend State** | **Redux Toolkit (RTK)** | Zustand, Context API | Predictable state container, time-travel debugging, atomic cart state transitions. | Boilerplate slices for large features. |
+| **WhatsApp Integration** | **OpenWA via Outbox** | Direct client HTTP call, Cloud API | Server-to-server decoupling via `whatsapp_outbox` table ensures billing transactions never fail if WhatsApp drops. | Requires background worker process and local device pairing. |
 
 ---
 
-## 2. Deep Dive: Cloud Firestore Trade-offs & Mitigations
-- **Challenge 1: Lack of Relational Joins:** Firestore cannot join `Products` and `TaxRates` during an invoice query.
-  - *Mitigation:* Denormalization. Product name and calculated taxes are stored directly on `InvoiceDetails` line items.
-- **Challenge 2: Aggregated Reporting Costs:** Summing 50,000 invoices for a daily report costs 50,000 document reads.
-  - *Mitigation:* Daily summary aggregation documents (or pre-filtered date queries constrained by composite indexes).
-- **Challenge 3: Atomic Sequences:** Firestore lacks an `AUTO_INCREMENT` column.
-  - *Mitigation:* Concurrency-safe Firestore transactions operating on dedicated `Counters` documents.
+## 2. Deep Dive: Architectural Shift from Firestore to PostgreSQL 16
+
+### 2.1 The Case for Relational PostgreSQL
+1. **Financial Concurrency & Row Locking:**
+   - In Firestore, concurrent checkouts could collide on document counter updates.
+   - In PostgreSQL, `SELECT ... FOR UPDATE` row locking on `stock_batches` and `invoice_number_sequences` guarantees deterministic serialization and prevents inventory overselling.
+2. **First-Expiry, First-Out (FEFO) Inventory:**
+   - PostgreSQL effortlessly handles multi-attribute ordering (`ORDER BY expiry_date NULLS LAST, id FOR UPDATE`) with partial indexes on unexpired stock (`WHERE quantity_available > 0`).
+3. **Audit Immutability & Database Triggers:**
+   - PostgreSQL triggers enforce that `stock_ledger` records can **never be updated or deleted**, establishing a tamper-proof audit trail for tax authorities.
+4. **Fast Catalog Search:**
+   - PostgreSQL's `pg_trgm` extension enables sub-50ms fuzzy text search on product names using GIN indexes, replacing expensive client-side filtering.
 
 ---
 
-## 3. Cloud Functions Recommendation
-**Recommendation:** Migrate core financial transactions from direct-client to Firebase Cloud Functions:
-- **Scope:** Bucket conversion to Invoice, stock decrements, and invoice cancellation.
-- **Benefits:** Guaranteed security boundary, tamper-proof tax calculation, and private logging.
-- **Status:** Documented and proposed for Phase 2 implementation following user approval.
-
----
-
-## 4. Strict Dependency Approval Policy
-To prevent security bloat and dependency vulnerabilities:
-1. **Zero Unapproved Packages:** No engineer or agent may run `npm install <new-package>` without documenting the requirement in `CHANGE_REQUESTS.md`.
-2. **Review Criteria:** Assess bundle size (via bundlephobia.com), maintenance velocity, open vulnerabilities, and license compatibility (MIT/Apache 2.0).
+## 3. Strict Dependency Governance Policy
+To maintain high security and code quality:
+1. **Zero Unapproved Dependencies:** Any new npm package must be justified, evaluated for vulnerability history, and approved via `CHANGE_REQUESTS.md`.
+2. **Evaluation Criteria:** License compatibility (MIT/Apache 2.0), active maintenance, bundle weight, and zero high/critical vulnerabilities on `npm audit`.

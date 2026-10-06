@@ -21,7 +21,8 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  Tooltip
 } from '@mui/material';
 import {
   QrCodeScanner as ScannerIcon,
@@ -35,7 +36,9 @@ import {
   QrCode2 as QrIcon,
   Payments as CashIcon,
   ClearAll as ClearIcon,
-  CameraAlt as CameraIcon
+  CameraAlt as CameraIcon,
+  RestorePage as RestoreIcon,
+  Layers as LayersIcon
 } from '@mui/icons-material';
 
 import {
@@ -50,7 +53,7 @@ import {
   loadBucket
 } from '../../../store/cartSlice';
 import { QRCodeSVG } from 'qrcode.react';
-import { addHeldBucket, removeHeldBucket } from '../../../store/heldBucketsSlice';
+import { addHeldBucket, removeHeldBucket, clearAllHeldBuckets } from '../../../store/heldBucketsSlice';
 import productService from '../../../_api/productService';
 import customerService from '../../../_api/customerService';
 import invoiceService from '../../../_api/invoiceService';
@@ -73,6 +76,7 @@ export default function PosTerminal() {
   const [createdInvoice, setCreatedInvoice] = useState(null);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [heldBucketsDialogOpen, setHeldBucketsDialogOpen] = useState(false);
 
   const barcodeInputRef = useRef(null);
 
@@ -118,6 +122,45 @@ export default function PosTerminal() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart]);
 
+  // Stock-aware product adder
+  const handleAddProductWithStockCheck = (product) => {
+    if (!product) return false;
+
+    // Expiry check
+    if (product.IsExpDate && product.Days <= 0) {
+      setToast({ open: true, message: `Blocked: "${product.Name}" batch has expired!`, severity: 'error' });
+      return false;
+    }
+
+    const stock = product.StockQuantity !== undefined ? parseInt(product.StockQuantity, 10) : 999999;
+    if (stock <= 0) {
+      setToast({ open: true, message: `Blocked: "${product.Name}" is Out of Stock! (0 units available)`, severity: 'error' });
+      return false;
+    }
+
+    const productId = String(product.Id || product.id || product.ProductNumber || '');
+    const productNum = String(product.ProductNumber || product.productNumber || '');
+    const inCart = cart.items.find(i => String(i.id) === productId || (productNum && String(i.productNumber) === productNum));
+    const currentCartQty = inCart ? inCart.quantity : 0;
+
+    if (currentCartQty >= stock) {
+      setToast({
+        open: true,
+        message: `Stock limit reached: Only ${stock} unit(s) of "${product.Name}" available in inventory!`,
+        severity: 'warning'
+      });
+      return false;
+    }
+
+    dispatch(addItem(product));
+    setToast({
+      open: true,
+      message: `Added: ${product.Name} (${currentCartQty + 1}/${stock} in bucket)`,
+      severity: 'success'
+    });
+    return true;
+  };
+
   // Barcode Scan / Enter Key handler
   const handleBarcodeSubmit = async (e) => {
     if (e.key === 'Enter' && searchQuery.trim()) {
@@ -125,20 +168,15 @@ export default function PosTerminal() {
       const code = searchQuery.trim();
       const matched = await productService.getProductByBarcode(code);
       if (matched) {
-        // Expiry check
-        if (matched.IsExpDate && matched.Days <= 0) {
-          setToast({ open: true, message: `Blocked: ${matched.Name} batch has expired!`, severity: 'error' });
-        } else {
-          dispatch(addItem(matched));
-          setToast({ open: true, message: `Added: ${matched.Name}`, severity: 'success' });
+        if (handleAddProductWithStockCheck(matched)) {
           setSearchQuery('');
         }
       } else {
         // If not exact barcode, check first product match
         if (products.length > 0) {
-          dispatch(addItem(products[0]));
-          setToast({ open: true, message: `Added: ${products[0].Name}`, severity: 'success' });
-          setSearchQuery('');
+          if (handleAddProductWithStockCheck(products[0])) {
+            setSearchQuery('');
+          }
         } else {
           setToast({ open: true, message: `No product found for barcode "${code}"`, severity: 'warning' });
         }
@@ -152,12 +190,7 @@ export default function PosTerminal() {
     const cleanCode = String(scannedCode).trim();
     const matched = await productService.getProductByBarcode(cleanCode);
     if (matched) {
-      if (matched.IsExpDate && matched.Days <= 0) {
-        setToast({ open: true, message: `Blocked: ${matched.Name} batch has expired!`, severity: 'error' });
-      } else {
-        dispatch(addItem(matched));
-        setToast({ open: true, message: `Scanned & Added: ${matched.Name} (₹${matched.Cost.toFixed(2)})`, severity: 'success' });
-      }
+      handleAddProductWithStockCheck(matched);
     } else {
       setToast({ open: true, message: `No product found for scanned code: "${cleanCode}"`, severity: 'warning' });
     }
@@ -165,7 +198,7 @@ export default function PosTerminal() {
 
   // Add Product Card click
   const handleProductCardClick = (product) => {
-    dispatch(addItem(product));
+    handleAddProductWithStockCheck(product);
   };
 
   // Customer Mobile Lookup
@@ -181,24 +214,76 @@ export default function PosTerminal() {
     }
   };
 
+  // Generate next unique bucket number
+  const getNextBucketNumber = () => {
+    if (!heldBuckets || heldBuckets.length === 0) return 'BKT-01';
+    const nums = heldBuckets.map(b => {
+      const match = String(b.bucketNumber || '').match(/\d+/);
+      return match ? parseInt(match[0], 10) : 0;
+    });
+    const max = Math.max(...nums, 0);
+    return `BKT-${String(max + 1).padStart(2, '0')}`;
+  };
+
   // Hold Bucket (F8)
   const handleHoldBucket = () => {
-    if (cart.items.length === 0) {
+    if (!cart.items || cart.items.length === 0) {
       setToast({ open: true, message: 'Cart is empty. Nothing to hold.', severity: 'warning' });
       return;
     }
+    const bucketNum = getNextBucketNumber();
+    const custName = (cart.customer?.name && cart.customer?.name !== 'Walk-in Customer') ? cart.customer.name : 'Walk-in';
     const newHold = {
       id: `bkt_held_${Date.now()}`,
-      bucketNumber: `BKT-${heldBuckets.length + 1}`,
-      customerName: cart.customer.name || 'Walk-in',
+      bucketNumber: bucketNum,
+      customerName: custName,
       itemsCount: cart.items.length,
       total: cart.grandTotal,
-      cartData: { ...cart },
+      cartData: {
+        bucketId: `bkt_${Date.now()}`,
+        bucketNumber: bucketNum,
+        items: cart.items.map(i => ({ ...i })),
+        customer: { ...cart.customer },
+        paymentMode: cart.paymentMode
+      },
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
     dispatch(addHeldBucket(newHold));
     dispatch(clearCart());
-    setToast({ open: true, message: `Bucket held as ${newHold.bucketNumber}`, severity: 'info' });
+    setToast({ open: true, message: `Bucket held as ${newHold.bucketNumber} for ${custName}`, severity: 'info' });
+  };
+
+  // Select / Restore Held Bucket
+  const handleSelectBucket = (hb) => {
+    if (!hb || !hb.cartData) return;
+
+    // If current cart has items, hold it first so nothing is lost!
+    if (cart.items && cart.items.length > 0) {
+      const autoNum = getNextBucketNumber();
+      const currentCustName = (cart.customer?.name && cart.customer?.name !== 'Walk-in Customer') ? cart.customer.name : 'Walk-in';
+      const autoHold = {
+        id: `bkt_held_${Date.now()}`,
+        bucketNumber: autoNum,
+        customerName: currentCustName,
+        itemsCount: cart.items.length,
+        total: cart.grandTotal,
+        cartData: {
+          bucketId: `bkt_${Date.now()}`,
+          bucketNumber: autoNum,
+          items: cart.items.map(i => ({ ...i })),
+          customer: { ...cart.customer },
+          paymentMode: cart.paymentMode
+        },
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      dispatch(addHeldBucket(autoHold));
+      setToast({ open: true, message: `Current cart held as ${autoNum}. Switched to ${hb.bucketNumber} (${hb.customerName})`, severity: 'info' });
+    } else {
+      setToast({ open: true, message: `Loaded ${hb.bucketNumber} (${hb.customerName})`, severity: 'success' });
+    }
+
+    dispatch(loadBucket(hb.cartData));
+    dispatch(removeHeldBucket(hb.id));
   };
 
   // Finalize Checkout (F9)
@@ -218,11 +303,18 @@ export default function PosTerminal() {
     }
 
     try {
-      // Create Invoice atomically
+      // Create Invoice atomically (which decrements stock in DB)
       const invoice = await invoiceService.createInvoiceFromCart(cart, activeStore);
       setCreatedInvoice(invoice);
       setShowSuccessDialog(true);
       dispatch(clearCart());
+
+      // Immediately re-fetch updated catalog from backend so stock deductions reflect live on screen!
+      const refreshed = await productService.getProducts({
+        categoryId: selectedCategory,
+        searchTerm: searchQuery
+      });
+      setProducts(refreshed);
     } catch (err) {
       setToast({ open: true, message: `Checkout error: ${err.message}`, severity: 'error' });
     }
@@ -311,54 +403,79 @@ export default function PosTerminal() {
           {/* Product Cards Grid */}
           <Box sx={{ flexGrow: 1, overflowY: 'auto', pr: 1 }}>
             <Grid container spacing={1.5}>
-              {products.map((prod) => (
-                <Grid item xs={6} sm={4} md={3} key={prod.Id}>
-                  <Card
-                    onClick={() => handleProductCardClick(prod)}
-                    sx={{
-                      cursor: 'pointer',
-                      height: '100%',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      transition: 'all 0.15s ease',
-                      '&:hover': {
-                        transform: 'translateY(-2px)',
-                        boxShadow: '0 4px 12px rgba(59, 91, 219, 0.15)',
-                        borderColor: '#3B5BDB'
-                      }
-                    }}
-                  >
-                    <CardContent sx={{ p: 1.5, pb: '12px !important' }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#1F2937', fontSize: 13, minHeight: 36 }}>
-                          {prod.Name}
+              {products.map((prod) => {
+                const prodNum = String(prod.ProductNumber || '');
+                const inCart = cart.items.find(i => String(i.id) === String(prod.Id) || (prodNum && String(i.productNumber) === prodNum));
+                const inCartQty = inCart ? inCart.quantity : 0;
+                const isOutOfStock = prod.StockQuantity <= 0;
+                const isMaxInCart = inCartQty >= prod.StockQuantity && !isOutOfStock;
+
+                return (
+                  <Grid item xs={6} sm={4} md={3} key={prod.Id}>
+                    <Card
+                      onClick={() => handleProductCardClick(prod)}
+                      sx={{
+                        cursor: isOutOfStock ? 'not-allowed' : 'pointer',
+                        opacity: isOutOfStock ? 0.6 : 1,
+                        bgcolor: isOutOfStock ? '#F8FAFC' : '#FFFFFF',
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        transition: 'all 0.15s ease',
+                        border: isOutOfStock ? '1px dashed #CBD5E1' : (isMaxInCart ? '1px solid #FFE066' : '1px solid #E3E8EF'),
+                        '&:hover': {
+                          transform: isOutOfStock ? 'none' : 'translateY(-2px)',
+                          boxShadow: isOutOfStock ? 'none' : '0 4px 12px rgba(59, 91, 219, 0.15)',
+                          borderColor: isOutOfStock ? '#CBD5E1' : '#3B5BDB'
+                        }
+                      }}
+                    >
+                      <CardContent sx={{ p: 1.5, pb: '12px !important' }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600, color: isOutOfStock ? '#9CA3AF' : '#1F2937', fontSize: 13, minHeight: 36 }}>
+                            {prod.Name}
+                          </Typography>
+                          {prod.IsExpDate && (
+                            <Chip
+                              label={`${prod.Days}d`}
+                              size="small"
+                              sx={{ height: 18, fontSize: 10, bgcolor: '#FFF9DB', color: '#D9480F', fontWeight: 600 }}
+                            />
+                          )}
+                        </Box>
+                        <Typography variant="caption" sx={{ color: '#6B7280', display: 'block', mb: 1 }}>
+                          Barcode: {prod.ProductNumber}
                         </Typography>
-                        {prod.IsExpDate && (
-                          <Chip
-                            label={`${prod.Days}d`}
-                            size="small"
-                            sx={{ height: 18, fontSize: 10, bgcolor: '#FFF9DB', color: '#D9480F', fontWeight: 600 }}
-                          />
-                        )}
-                      </Box>
-                      <Typography variant="caption" sx={{ color: '#6B7280', display: 'block', mb: 1 }}>
-                        Barcode: {prod.ProductNumber}
-                      </Typography>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="h5" sx={{ fontWeight: 700, color: '#3B5BDB' }}>
-                          ₹{prod.Cost.toFixed(2)}
-                        </Typography>
-                        <Chip
-                          label={`Stock: ${prod.StockQuantity}`}
-                          size="small"
-                          sx={{ height: 20, fontSize: 11, bgcolor: '#EBFBEE', color: '#2F9E44', fontWeight: 600 }}
-                        />
-                      </Box>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              ))}
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="h5" sx={{ fontWeight: 700, color: isOutOfStock ? '#9CA3AF' : '#3B5BDB' }}>
+                            ₹{prod.Cost.toFixed(2)}
+                          </Typography>
+                          {isOutOfStock ? (
+                            <Chip
+                              label="Out of Stock"
+                              size="small"
+                              sx={{ height: 20, fontSize: 10, bgcolor: '#FFE3E3', color: '#E03131', fontWeight: 700 }}
+                            />
+                          ) : (
+                            <Chip
+                              label={isMaxInCart ? `All ${prod.StockQuantity} in Cart` : `Stock: ${prod.StockQuantity}`}
+                              size="small"
+                              sx={{
+                                height: 20,
+                                fontSize: 11,
+                                bgcolor: isMaxInCart ? '#FFF9DB' : '#EBFBEE',
+                                color: isMaxInCart ? '#D9480F' : '#2F9E44',
+                                fontWeight: 600
+                              }}
+                            />
+                          )}
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                );
+              })}
             </Grid>
           </Box>
         </Grid>
@@ -370,47 +487,94 @@ export default function PosTerminal() {
           <Paper sx={{ p: 2, flexGrow: 1, display: 'flex', flexDirection: 'column', borderRadius: 2 }}>
             {/* Held Buckets Row (Tabs) */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-              <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto' }}>
+              <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', alignItems: 'center', py: 0.5 }}>
                 <Chip
-                  label="Active: BKT-01"
+                  label={`Active Cart (${cart.items.length})`}
                   color="primary"
                   size="small"
                   sx={{ fontWeight: 700, bgcolor: '#3B5BDB' }}
                 />
                 {heldBuckets.map((hb) => (
-                  <Chip
-                    key={hb.id}
-                    label={`${hb.bucketNumber} (₹${hb.total})`}
-                    variant="outlined"
-                    size="small"
-                    onClick={() => {
-                      if (hb.cartData) dispatch(loadBucket(hb.cartData));
-                      dispatch(removeHeldBucket(hb.id));
-                    }}
-                    onDelete={() => dispatch(removeHeldBucket(hb.id))}
-                    sx={{ fontWeight: 600, color: '#F59F00', borderColor: '#F59F00' }}
-                  />
+                  <Tooltip key={hb.id} title={`Click to select & resume ${hb.bucketNumber} (${hb.customerName})`}>
+                    <Chip
+                      clickable
+                      icon={<RestoreIcon sx={{ fontSize: '16px !important', color: '#D9480F !important' }} />}
+                      label={`${hb.bucketNumber}: ${hb.customerName} (₹${hb.total})`}
+                      variant="filled"
+                      size="small"
+                      onClick={() => handleSelectBucket(hb)}
+                      onDelete={(e) => {
+                        e.stopPropagation();
+                        dispatch(removeHeldBucket(hb.id));
+                        setToast({ open: true, message: `Discarded ${hb.bucketNumber}`, severity: 'info' });
+                      }}
+                      sx={{
+                        fontWeight: 600,
+                        color: '#D9480F',
+                        bgcolor: '#FFF9DB',
+                        border: '1px solid #FFE066',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        '&:hover': {
+                          bgcolor: '#FFE066',
+                          transform: 'translateY(-1px)',
+                          boxShadow: '0 2px 8px rgba(245,159,0,0.2)'
+                        }
+                      }}
+                    />
+                  </Tooltip>
                 ))}
               </Box>
-              <Button
-                size="small"
-                variant="outlined"
-                color="secondary"
-                onClick={() => dispatch(clearCart())}
-                startIcon={<ClearIcon />}
-                sx={{ fontSize: 11, py: 0.2 }}
-              >
-                Clear
-              </Button>
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                {heldBuckets.length > 0 && (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="warning"
+                    onClick={() => setHeldBucketsDialogOpen(true)}
+                    startIcon={<LayersIcon />}
+                    sx={{
+                      fontSize: 11,
+                      py: 0.2,
+                      px: 1,
+                      fontWeight: 700,
+                      bgcolor: '#F59F00',
+                      '&:hover': { bgcolor: '#E67700' }
+                    }}
+                  >
+                    Held ({heldBuckets.length})
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  onClick={handleHoldBucket}
+                  startIcon={<HoldIcon />}
+                  sx={{ fontSize: 11, py: 0.2 }}
+                >
+                  Hold (F8)
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="secondary"
+                  onClick={() => dispatch(clearCart())}
+                  startIcon={<ClearIcon />}
+                  sx={{ fontSize: 11, py: 0.2 }}
+                >
+                  Clear
+                </Button>
+              </Box>
             </Box>
 
             {/* Customer Lookup Bar */}
-            <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1, bgcolor: '#F8FAFC', borderRadius: 1.5, border: '1px solid #E3E8EF' }}>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1, bgcolor: '#F8FAFC', borderRadius: 1.5, border: '1px solid #E3E8EF', alignItems: 'center' }}>
               <TextField
                 size="small"
                 fullWidth
                 placeholder="Customer Mobile (10 digits)"
-                value={cart.customer.mobileNumber}
+                value={cart.customer?.mobileNumber || ''}
                 onChange={handleCustomerMobileChange}
                 InputProps={{
                   startAdornment: <InputAdornment position="start"><PersonIcon sx={{ fontSize: 18 }} /></InputAdornment>
@@ -420,9 +584,19 @@ export default function PosTerminal() {
                 size="small"
                 fullWidth
                 placeholder="Customer Name"
-                value={cart.customer.name}
+                value={cart.customer?.name || ''}
                 onChange={(e) => dispatch(setCustomer({ name: e.target.value }))}
               />
+              {(cart.customer?.mobileNumber || (cart.customer?.name && cart.customer?.name !== 'Walk-in Customer')) && (
+                <IconButton
+                  size="small"
+                  title="Reset Customer to Walk-in"
+                  onClick={() => dispatch(setCustomer({ name: 'Walk-in Customer', mobileNumber: '', gstin: '' }))}
+                  sx={{ color: '#6B7280', p: 0.5 }}
+                >
+                  <ClearIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              )}
             </Box>
 
             {/* Cart Items List */}
@@ -452,10 +626,15 @@ export default function PosTerminal() {
                       </Typography>
                       <Typography variant="caption" sx={{ color: '#6B7280' }}>
                         ₹{item.rate.toFixed(2)} + GST {item.taxPercent}%
+                        {item.stockQuantity !== undefined && item.stockQuantity < 99999 && (
+                          <span style={{ marginLeft: 6, color: item.quantity >= item.stockQuantity ? '#D9480F' : '#6B7280', fontWeight: 600 }}>
+                            (Max: {item.stockQuantity})
+                          </span>
+                        )}
                       </Typography>
                     </Box>
 
-                    {/* Stepper Buttons */}
+                    {/* Stepper Buttons with stock limit enforcement */}
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: 1.5 }}>
                       <IconButton
                         size="small"
@@ -469,8 +648,24 @@ export default function PosTerminal() {
                       </Typography>
                       <IconButton
                         size="small"
-                        onClick={() => dispatch(updateQuantity({ id: item.id, quantity: item.quantity + 1 }))}
-                        sx={{ bgcolor: '#F1F5F9', p: 0.5 }}
+                        disabled={item.stockQuantity !== undefined && item.quantity >= item.stockQuantity}
+                        onClick={() => {
+                          const max = item.stockQuantity !== undefined ? item.stockQuantity : 999999;
+                          if (item.quantity >= max) {
+                            setToast({
+                              open: true,
+                              message: `Limit reached: Only ${max} unit(s) available for "${item.name}"!`,
+                              severity: 'warning'
+                            });
+                            return;
+                          }
+                          dispatch(updateQuantity({ id: item.id, quantity: item.quantity + 1 }));
+                        }}
+                        sx={{
+                          bgcolor: (item.stockQuantity !== undefined && item.quantity >= item.stockQuantity) ? '#F1F5F9' : '#EEF2FF',
+                          color: (item.stockQuantity !== undefined && item.quantity >= item.stockQuantity) ? '#9CA3AF' : '#3B5BDB',
+                          p: 0.5
+                        }}
                       >
                         <AddIcon sx={{ fontSize: 14 }} />
                       </IconButton>
@@ -626,9 +821,121 @@ export default function PosTerminal() {
         <InvoiceSuccessDialog
           open={showSuccessDialog}
           invoice={createdInvoice}
-          onClose={() => setShowSuccessDialog(false)}
+          onClose={async () => {
+            setShowSuccessDialog(false);
+            const refreshed = await productService.getProducts({
+              categoryId: selectedCategory,
+              searchTerm: searchQuery
+            });
+            setProducts(refreshed);
+          }}
         />
       )}
+
+      {/* Held Buckets Management Dialog */}
+      <Dialog
+        open={heldBucketsDialogOpen}
+        onClose={() => setHeldBucketsDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 700, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Held Buckets ({heldBuckets.length})</span>
+          <Typography variant="caption" sx={{ color: '#6B7280' }}>
+            Select any bucket to resume billing
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 2 }}>
+          {heldBuckets.length === 0 ? (
+            <Typography sx={{ textAlign: 'center', py: 4, color: '#6B7280' }}>
+              No buckets currently on hold.
+            </Typography>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              {heldBuckets.map((hb) => (
+                <Paper
+                  key={hb.id}
+                  variant="outlined"
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    borderColor: '#FFE066',
+                    bgcolor: '#FFFDF5',
+                    transition: 'all 0.15s ease',
+                    '&:hover': { borderColor: '#F59F00', boxShadow: '0 4px 12px rgba(245, 159, 0, 0.15)' }
+                  }}
+                >
+                  <Box sx={{ pr: 2 }}>
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
+                      <Chip label={hb.bucketNumber} size="small" sx={{ fontWeight: 700, bgcolor: '#F59F00', color: 'white' }} />
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1F2937' }}>
+                        {hb.customerName}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#9CA3AF' }}>
+                        {hb.timestamp}
+                      </Typography>
+                    </Box>
+                    <Typography variant="body2" sx={{ color: '#4B5563' }}>
+                      {hb.itemsCount} item(s) • Total: <strong>₹{Number(hb.total || 0).toFixed(2)}</strong>
+                    </Typography>
+                    {hb.cartData?.items && hb.cartData.items.length > 0 && (
+                      <Typography variant="caption" sx={{ color: '#6B7280', display: 'block', mt: 0.5 }}>
+                        {hb.cartData.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
+                      </Typography>
+                    )}
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={<RestoreIcon />}
+                      onClick={() => {
+                        handleSelectBucket(hb);
+                        setHeldBucketsDialogOpen(false);
+                      }}
+                      sx={{ bgcolor: '#3B5BDB', fontWeight: 700, textTransform: 'none', '&:hover': { bgcolor: '#2B44B8' } }}
+                    >
+                      Resume Cart
+                    </Button>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      title="Discard Bucket"
+                      onClick={() => {
+                        dispatch(removeHeldBucket(hb.id));
+                        setToast({ open: true, message: `Discarded ${hb.bucketNumber}`, severity: 'info' });
+                      }}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                </Paper>
+              ))}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2, justifyContent: 'space-between' }}>
+          {heldBuckets.length > 0 ? (
+            <Button
+              color="error"
+              size="small"
+              onClick={() => {
+                dispatch(clearAllHeldBuckets());
+                setHeldBucketsDialogOpen(false);
+                setToast({ open: true, message: 'All held buckets cleared', severity: 'info' });
+              }}
+            >
+              Clear All Held
+            </Button>
+          ) : <Box />}
+          <Button onClick={() => setHeldBucketsDialogOpen(false)} variant="outlined">
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Toast Alert */}
       <Snackbar

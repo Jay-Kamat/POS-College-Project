@@ -1,96 +1,93 @@
 # Production Deployment & Hosting Architecture: POS & Billing System
 
-## 1. Hosting Architecture
-The POS & Billing System consists of two primary operational components requiring distinct hosting topologies:
-1. **Frontend Single Page Application (`POSUI`):** Static assets built with React 18, hosted on **Firebase Hosting** with global CDN distribution and automated SSL termination.
-2. **WhatsApp Gateway Microservice (`OpenWA`):** A persistent stateful Node.js (NestJS) process utilizing Chromium (Puppeteer) or raw WebSocket sockets (`@whiskeysockets/baileys`). It **MUST** run on a dedicated persistent server or on-premise store gateway machine to maintain an active WhatsApp session.
+## 1. Hosting Architecture Overview
+The POS & Billing System is packaged as a multi-container architecture using Docker Compose for local/on-premise store deployments, and standard container orchestration (e.g., Docker Swarm, ECS, or Kubernetes) for cloud deployments.
 
 ```mermaid
-graph LR
-    subgraph Store_Environment [Store Branch On-Premise]
-        Terminal[POS Terminal Browsers\nChrome / Edge on Port 3000]
-        StoreGateway[On-Premise Mini PC / Edge Server\nOpenWA NestJS Daemon - Port 2785/2886]
-        WhatsAppPhone[Store Phone with WhatsApp]
+graph TD
+    subgraph OnPremise_Or_Cloud [Containerized Application Stack]
+        Nginx[Nginx Reverse Proxy / Static Host\nPOSUI Port 3000]
+        BackendAPI[NestJS Backend API\nNode 22 LTS - Port 4000]
+        OpenWAGateway[OpenWA WhatsApp Microservice\nNestJS - Port 2785 / 2886]
+        PostgresDB[(PostgreSQL 16 Database\nPort 5432)]
     end
 
-    subgraph Google_Cloud [Firebase & Google Cloud Platform]
-        Hosting[Firebase Hosting CDN\npos.storebrand.com]
-        Firestore[Cloud Firestore Asia-South1\nTransactional DB]
-        Auth[Firebase Authentication]
+    subgraph Volumes [Persistent Storage Volumes]
+        PGData[(pg_data Volume)]
+        WASession[(openwa_session Volume)]
     end
 
-    Terminal -->|Load Static UI Assets| Hosting
-    Terminal -->|Direct TLS Queries| Firestore
-    Terminal -->|Auth Tokens| Auth
-    Terminal -->|LAN POST /messages/send-text| StoreGateway
-    StoreGateway <-->|Persistent Socket Session| WhatsAppPhone
+    Nginx -->|Internal Network| BackendAPI
+    BackendAPI -->|Prisma Connection Pool| PostgresDB
+    BackendAPI -->|Server-to-Server REST| OpenWAGateway
+    PostgresDB --- PGData
+    OpenWAGateway --- WASession
 ```
 
 ---
 
-## 2. Multi-Environment Staging Strategy
-To ensure total isolation of production billing data from staging, three separate Firebase projects are configured:
+## 2. Docker Compose Topology (`docker-compose.yml`)
 
-| Environment | Firebase Project ID | Purpose | URL / Access |
+The production/local stack defines four coordinated services:
+
+### 2.1 Services Definition
+1. **`postgres`:**
+   - Image: `postgres:16-alpine`
+   - Volume: `pg_data:/var/lib/postgresql/data`
+   - Extensions: Preloaded with `pg_trgm`, `citext`, `pgcrypto`.
+   - Healthcheck: `pg_isready -U postgres -d pos_billing_db`
+2. **`backend`:**
+   - Build: Multi-stage Dockerfile based on `node:22-alpine`.
+   - Release Entrypoint: Runs `prisma migrate deploy` prior to launching `node dist/main.js`.
+   - Depends On: `postgres` (condition: `service_healthy`).
+   - Ports: Exposes `4000:4000`.
+3. **`openwa`:**
+   - Build: `OpenWA/` Dockerfile with Chromium dependencies.
+   - Volume: `openwa_session:/app/auth_info_baileys` (CRITICAL: WhatsApp session tokens must persist across container restarts).
+   - Ports: Exposes `2785:2785` (API) and `2886:2886` (Pairing UI).
+4. **`posui`:**
+   - Production multi-stage build: Vite production build (`dist/`) copied to an `nginx:alpine` container.
+   - Ports: Exposes `3000:80`.
+
+---
+
+## 3. Database Migration Deployment Pipeline
+
+### 3.1 Zero-Downtime Migration Policy
+- **Additive First:** Schema changes in production must be backwards-compatible (e.g., add new nullable column first, deploy updated backend code, then apply NOT NULL constraint if necessary).
+- **Never Edit Applied Migrations:** Existing migration files in `prisma/migrations` are strictly immutable once committed.
+- **Automated Deployment:** CI/CD runners or release containers execute:
+  ```bash
+  npx prisma migrate deploy
+  ```
+  If any migration fails, the deployment aborts immediately, leaving the database in a predictable state.
+
+### 3.2 Down-Path and Emergency Rollback
+Every migration includes documented rollback SQL in `docs/DATABASE_SCHEMA.md`. In the event of an emergency release rollback:
+1. Revert the application container image to the prior stable release tag.
+2. Execute the corresponding down-path SQL script using a database administration console or release script.
+
+---
+
+## 4. Multi-Environment Staging Strategy
+
+| Environment | Database Target | Backend API Host | WhatsApp Integration |
 | :--- | :--- | :--- | :--- |
-| **Development** | `pos-billing-dev` | Local development, unit testing, Firestore Emulator. | `http://localhost:3000` |
-| **Staging** | `pos-billing-stage` | End-to-end integration testing, QA verification, mock OpenWA. | `https://stage-pos.web.app` |
-| **Production** | `pos-billing-prod` | Live store operations, audited transactions, real receipts. | `https://pos.dailymart.in` |
+| **Development** | Local Docker Postgres (`:5432`) | `http://localhost:4000` | Local OpenWA with dummy SIM |
+| **Staging** | Managed PostgreSQL (Stage RDS / Cloud SQL) | `https://api-stage.dailymart.in` | Dedicated Staging OpenWA gateway |
+| **Production** | Managed PostgreSQL 16 (Multi-AZ, Daily PITR) | `https://api.dailymart.in` | Dedicated On-Premise Store Gateway |
 
 ---
 
-## 3. Deployment Procedures
-
-### 3.1 Security Rules & Composite Indexes Deployment
-Rules and indexes must always be deployed **prior** to the front-end code release:
-```bash
-# 1. Authenticate with Firebase CLI
-firebase login
-
-# 2. Select the targeted project
-firebase use pos-billing-prod
-
-# 3. Deploy Firestore Security Rules
-firebase deploy --only firestore:rules
-
-# 4. Deploy Firestore Composite Indexes
-firebase deploy --only firestore:indexes
-```
-
-### 3.2 Frontend Deployment (`POSUI`)
-```bash
-# In POSUI directory
-npm install --legacy-peer-deps
-
-# Build production bundle with legacy OpenSSL flag
-$env:NODE_OPTIONS="--openssl-legacy-provider"
-npm run build
-
-# Deploy to Firebase Hosting
-firebase deploy --only hosting
-```
-
-### 3.3 OpenWA Gateway Production Setup
-Because OpenWA requires persistent file storage to preserve paired WhatsApp session tokens (`auth_info_baileys` folder), it must run as a managed system service using **PM2** or **Docker**:
-
-```bash
-# In OpenWA directory
-npm install
-npm run build
-
-# Start daemon via PM2
-pm2 start dist/main.js --name "openwa-gateway" --restart-delay=3000
-pm2 save
-pm2 startup
-```
-
----
-
-## 4. Rollback and Disaster Recovery Runbook
-1. **Frontend Instant Rollback:**
-   Firebase Hosting allows 1-click zero-downtime rollbacks via CLI or Console:
-   ```bash
-   firebase hosting:channel:deploy previous_version
-   ```
-2. **Security Rules Reversion:** Maintain `firestore.rules` under strict Git version control. Re-deploy the previously tagged stable ruleset immediately if permission conflicts occur.
-3. **OpenWA Session Recovery:** If the WhatsApp session drops or gets logged out, the store manager navigates to `http://localhost:2886`, generates a fresh QR code, and re-scans via the store smartphone.
+## 5. Automated CI/CD Pipeline (GitHub Actions)
+The automated workflow (`.github/workflows/ci.yml`) runs on every pull request to `main`:
+1. **Lint & Formatting:** `npm run lint` across `backend` and `POSUI`.
+2. **Typecheck:** `tsc --noEmit` in strict mode with 0 errors.
+3. **Container Service Boot:** Starts a real `postgres:16` test container in GitHub Actions.
+4. **Database Migration & Seed:** Executes `prisma migrate deploy` and `npm run seed`.
+5. **Automated Test Suite:**
+   - Unit tests (financial math with `decimal.js`).
+   - Integration tests (Supertest against real database).
+   - Concurrency tests (parallel invoice creation, FEFO last-unit race condition, idempotency retry).
+6. **Frontend Build Check:** Validates `npm run build` in `POSUI` with zero warnings.
+7. **Security Audit:** `npm audit --audit-level=high`.

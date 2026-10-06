@@ -17,9 +17,11 @@ import {
   CheckCircle as CheckIcon,
   WhatsApp as WhatsAppIcon,
   Print as PrintIcon,
+  Description as A4Icon,
   AddShoppingCart as NewBillIcon
 } from '@mui/icons-material';
 import whatsappService from '../../../_api/whatsappService';
+import { printThermalReceipt, printA4Invoice } from '../../../utils/printService';
 
 export default function InvoiceSuccessDialog({ open, invoice, onClose }) {
   const [isSendingWa, setIsSendingWa] = useState(false);
@@ -41,8 +43,12 @@ export default function InvoiceSuccessDialog({ open, invoice, onClose }) {
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrintThermal = () => {
+    printThermalReceipt(invoice);
+  };
+
+  const handlePrintA4 = () => {
+    printA4Invoice(invoice);
   };
 
   return (
@@ -145,14 +151,24 @@ export default function InvoiceSuccessDialog({ open, invoice, onClose }) {
         )}
       </DialogContent>
 
-      <DialogActions sx={{ p: 3, pt: 1, justifyContent: 'space-between' }}>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+      <DialogActions sx={{ p: 3, pt: 1, justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<PrintIcon />}
+            onClick={handlePrintThermal}
+            sx={{ fontWeight: 600, bgcolor: '#3B5BDB', '&:hover': { bgcolor: '#2B44B8' } }}
+          >
+            Print Thermal (80mm)
+          </Button>
           <Button
             variant="outlined"
-            startIcon={<PrintIcon />}
-            onClick={handlePrint}
+            startIcon={<A4Icon />}
+            onClick={handlePrintA4}
+            sx={{ fontWeight: 600 }}
           >
-            Print Receipt
+            Print A4
           </Button>
           <Button
             variant="contained"

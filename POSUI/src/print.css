@@ -1,0 +1,66 @@
+/* =========================================================================
+   POS & Billing System Global Print Stylesheet
+   ========================================================================= */
+
+@media print {
+  /* Hide all UI Chrome, Navbars, Sidebars, Buttons, and Overlays */
+  .no-print,
+  .MuiAppBar-root,
+  .MuiDrawer-root,
+  .MuiBackdrop-root,
+  .MuiSnackbar-root,
+  .MuiButton-root,
+  .MuiDialogActions-root,
+  .MuiIconButton-root,
+  button,
+  nav,
+  header,
+  aside {
+    display: none !important;
+  }
+
+  /* Reset body and container for pure printer output */
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 11pt !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Prevent page cuts through key table rows and cards */
+  tr, td, th, .printable-card, .label-card {
+    page-break-inside: avoid !important;
+  }
+
+  /* Ensure dialog / paper containers print cleanly without fixed positioning or shadows */
+  .MuiPaper-root {
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .MuiDialog-paper {
+    position: static !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .MuiDialog-container {
+    height: auto !important;
+    display: block !important;
+  }
+
+  /* Watermark styling */
+  .watermark-cancelled {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    opacity: 0.15 !important;
+  }
+}

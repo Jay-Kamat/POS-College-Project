@@ -77,7 +77,7 @@ export default function Login() {
         </Box>
 
         <Typography variant="caption" sx={{ color: '#BAC8FF' }}>
-          © 2026 POS & Billing System. Direct-to-Firestore Architecture.
+          © 2026 POS & Billing System. PostgreSQL Backend Architecture.
         </Typography>
       </Box>
 

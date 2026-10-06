@@ -1,133 +1,108 @@
 # Product Roadmap & Milestone Execution Plan: POS & Billing System
 
 ## Overview
-This roadmap establishes an incremental, milestone-driven build plan for the POS & Billing System. Each milestone defines a discrete, end-to-end slice with strict dependencies, acceptance criteria, and a definition of done.
+This roadmap establishes a strict milestone-driven execution plan for the NestJS + PostgreSQL 16 backend and its integration with the React frontend (`POSUI`). Each milestone is isolated, test-driven, and governed by a **Verification Gate** that must fully pass before proceeding to the subsequent milestone.
 
 ---
 
-## Milestone Breakdown
+## Backend Milestone Breakdown (B0 – B16)
 
-### Milestone 1: Project Setup, Firebase Config, Env, Theme & Routing (M1)
-- **Goal:** Establish repo structure, initialize Mantis/MUI design system tokens, configure React Router v6, and connect Firebase SDK initialization.
-- **Tasks:**
-  - Setup React 18 base with MUI theme matching `#3B5BDB` primary and Inter typography.
-  - Setup `.env` parsing with validation for Firebase and OpenWA endpoints.
-  - Configure root route layout with collapsible sidebar and app shell.
-- **Dependencies:** None.
-- **Definition of Done:** App builds cleanly; routes navigate; Firebase connects without errors.
+### Milestone B0: Documentation & Architectural Governance (B0)
+- **Scope:** Update all 11 core architecture and specification documents; log approved `CR-001` in `CHANGE_REQUESTS.md`; update `CHANGELOG.md` and `PROGRESS.md`.
+- **Verification Gate:** Formal user review and approval.
 
-### Milestone 2: Authentication & RBAC Baseline (M2)
-- **Goal:** Implement Google OAuth and Email/Password authentication with role-based routing.
-- **Tasks:**
-  - Implement `AuthContext` with `onAuthStateChanged`.
-  - Create Login/Signup screens with Formik + Yup.
-  - Setup initial Firestore Security Rules protecting collections by role.
-- **Dependencies:** M1.
-- **Definition of Done:** Admin, Cashier, and Inventory Manager users log in; unauthorized routes show 403.
+---
 
-### Milestone 3: Store Masters, Tax Rates, Settings & Categories (M3)
-- **Goal:** Manage core administrative configuration records.
-- **Tasks:**
-  - Implement `Stores` profile editor (GSTIN, FSSAI, Address).
-  - Implement `TaxRates` master (CGST/SGST/IGST slabs: 0%, 5%, 12%, 18%, 28%).
-  - Implement `ProductCategory` CRUD dialogs with soft-delete.
-- **Dependencies:** M2.
-- **Definition of Done:** Admin can create and update store settings, tax slabs, and categories.
+### Milestone B1: Project Scaffold & Infrastructure Baseline (B1)
+- **Scope:** Initialize `backend/` with NestJS (TypeScript strict mode), Prisma ORM, Docker Compose for PostgreSQL 16, startup config validation (`class-validator`), structured logging (`nestjs-pino`), global HTTP filters, `ValidationPipe`, Swagger at `/api/docs`, and `/health` endpoints.
+- **Verification Gate:** `docker compose up` boots successfully; `/health/ready` returns HTTP 200 OK; backend refuses to boot if required environment variables are missing; `npm run lint` and `tsc --noEmit` pass with zero errors.
 
-### Milestone 4: Product Catalog Management (M4)
-- **Goal:** Comprehensive product catalog management with shelf-life attributes.
-- **Tasks:**
-  - Build paginated `Products` table with category filters and search.
-  - Build Add/Edit drawer with Formik + Yup (Cost, Ingredients, `IsExpDate`, `Days`).
-  - Implement soft delete (`RecordStatus: 1`) and restore.
-- **Dependencies:** M3.
-- **Definition of Done:** Products created and listed with correct tax rate association.
+---
 
-### Milestone 5: Vendors & Purchase Orders (M5)
-- **Goal:** Manage external suppliers and create procurement orders.
-- **Tasks:**
-  - Build `Vendors` directory with unique `VendorCode`.
-  - Build `PurchaseOrderHeader` and `Details` flow with line items, rates, and target dates.
-- **Dependencies:** M4.
-- **Definition of Done:** POs can be drafted, viewed, and exported to PDF.
+### Milestone B2: Database Schema, Migrations & Seed Engine (B2)
+- **Scope:** Complete `prisma/schema.prisma` across all 21 tables; apply initial raw SQL migrations for CHECK constraints, triggers, and GIN trigram indexes; develop deterministic development seed script (`prisma/seed.ts`).
+- **Verification Gate:** `npx prisma migrate reset` succeeds cleanly from an empty database; `npm run seed` executes without error; automated constraint tests confirm invalid GSTINs, mismatching tax rates (`igst != cgst + sgst`), and duplicate barcodes fail as expected.
 
-### Milestone 6: Material Inward, Barcode Generation & Stock Derivation (M6)
-- **Goal:** Inward stock batches against PO or ad-hoc, generate batch barcodes with expiry.
-- **Tasks:**
-  - Build Material Inward stepper (with PO / without PO).
-  - Calculate batch expiry based on product shelf life.
-  - Generate unique barcodes in `MaterialInwardBarcodes` and printable preview labels.
-- **Dependencies:** M5.
-- **Definition of Done:** Stock batches saved with generated barcodes printable on thermal labels.
+---
 
-### Milestone 7: Customer Directory (M7)
-- **Goal:** Manage retail and B2B customers with mobile lookup.
-- **Tasks:**
-  - Build `Customers` list with mobile search.
-  - Build Customer creation drawer with GSTIN and State selection.
-- **Dependencies:** M3.
-- **Definition of Done:** Customer lookup by 10-digit mobile number functions in < 100ms.
+### Milestone B3: Authentication, RBAC & Audit System (B3)
+- **Scope:** Implement argon2id password hashing, JWT access token issuing, httpOnly refresh token cookie rotation with reuse detection, account lockout (5 failed attempts for 15 minutes), Google OAuth ID token verification, and `@RequirePermission` guard.
+- **Verification Gate:** Unit and integration tests pass for login, refresh rotation, token family revocation upon reuse, and account lockout; automated route scan verifies protected endpoints return 401 without tokens and 403 without permissions.
 
-### Milestone 8: POS Terminal & Bucket Staging (M8)
-- **Goal:** High-velocity checkout interface with barcode scanning and held carts.
-- **Tasks:**
-  - Build split 60/40 POS terminal layout (`/apps/bucket`).
-  - Barcode scanner auto-focus and keyboard-wedge listener.
-  - Real-time cart staging in `BucketHeader` and `BucketDetails`.
-  - Tabbed held bucket switching (F8 shortcut).
-- **Dependencies:** M4, M6, M7.
-- **Definition of Done:** Cashier scans barcode, item adds to cart in < 100ms; carts hold and resume cleanly.
+---
 
-### Milestone 9: Invoice Generation, GST Engine & Payments (M9)
-- **Goal:** Atomic conversion of bucket to sales invoice with GST calculation.
-- **Tasks:**
-  - Transactional invoice counter increment (`DocumentNumber`).
-  - Client-side GST engine splitting CGST/SGST vs IGST based on State.
-  - Payment mode toggle: Cash (with change calc) vs UPI (with QR code).
-  - Atomic commit writing `InvoiceHeader`/`Details` and closing `Bucket`.
-- **Dependencies:** M8.
-- **Definition of Done:** Concurrency-safe invoice created; financial math verified to 2 decimal places.
+### Milestone B4: Master Data Administration (B4)
+- **Scope:** CRUD, validation, soft-deletion (`record_status: 1`), and restoration for Stores, Tax Rates, System Settings, and Product Categories.
+- **Verification Gate:** Integration tests verify creation, updating, soft-delete, and restoration across all master collections with strict DTO validation.
 
-### Milestone 10: Invoice History, PDF & Soft Cancellation (M10)
-- **Goal:** Invoice management, thermal/A4 printing, and managerial soft cancellation.
-- **Tasks:**
-  - Build paginated Invoice list with date/status filters.
-  - Implement `@react-pdf/renderer` invoice template (FSSAI, GSTIN, line taxes).
-  - Implement Cancel Invoice modal requiring mandatory cancellation reason.
-- **Dependencies:** M9.
-- **Definition of Done:** Invoice PDFs render accurately; cancelled invoices display red watermark.
+---
 
-### Milestone 11: Digital WhatsApp Receipts via OpenWA (M11)
-- **Goal:** Automated and on-demand dispatch of structured text receipts via WhatsApp.
-- **Tasks:**
-  - Connect OpenWA HTTP client to port 2785.
-  - Format invoice summary message template with items, totals, and license numbers.
-  - Implement post-invoice send dialog with retry and failure degradation.
-- **Dependencies:** M9, M10.
-- **Definition of Done:** Receipts successfully delivered to customer WhatsApp with retry options.
+### Milestone B5: Products, Customers, Vendors & Search (B5)
+- **Scope:** Product catalog with shelf-life attributes (`IsExpDate`, `Days`); PostgreSQL GIN trigram index search; product lookup by barcode; customer 10-digit mobile lookup; vendor directory.
+- **Verification Gate:** Product text search responds in $< 50\text{ms}$ over 100,000 seeded items; `EXPLAIN ANALYZE` confirms GIN index scan; barcode and customer mobile resolution tests pass.
 
-### Milestone 12: Vendor Material Returns (M12)
-- **Goal:** Outward return notes for damaged or expired inventory.
-- **Tasks:**
-  - Build `MaterialReturns` reasons master.
-  - Build `MaterialReturnNoteHeader` and `Details` workflow.
-- **Dependencies:** M5, M6.
-- **Definition of Done:** Damaged/expired goods documented and linked to vendor debit records.
+---
 
-### Milestone 13: Dashboard & Analytics Reports (M13)
-- **Goal:** Financial KPI dashboard and operational reports with CSV export.
-- **Tasks:**
-  - Build Admin Dashboard KPI cards and ApexCharts.
-  - Build Daily Sales, Vendor-wise Sales, and Expired Stock reports.
-  - Implement client-side CSV streaming export.
-- **Dependencies:** M9, M10, M12.
-- **Definition of Done:** Reports render correct aggregated totals and export clean CSVs.
+### Milestone B6: Purchase Orders (B6)
+- **Scope:** PO header and line items CRUD; document numbering per store; lifecycle status state machine (`DRAFT` → `SENT` → `PARTIALLY_RECEIVED` → `RECEIVED` → `CANCELLED`); printable PDF data endpoint.
+- **Verification Gate:** PO status transition tests succeed; invalid status transitions rejected.
 
-### Milestone 14: Hardening, Security Audit & Production Deployment (M14)
-- **Goal:** Security rules verification, index deployment, emulator test suite, and CI/CD hosting.
-- **Tasks:**
-  - Run full test suite on Firestore Emulator.
-  - Deploy composite indexes and locked-down `firestore.rules`.
-  - Document production hosting configuration and OpenWA persistent service.
-- **Dependencies:** M1 to M13.
-- **Definition of Done:** Passes 100% of Production Readiness and Final Audit checklists.
+---
+
+### Milestone B7: Material Inward, Batches & Inventory Ledger (B7)
+- **Scope:** Material Inward docket processing; atomic creation of `stock_batches` with unique 13-digit thermal barcodes; auto-calculation of shelf-life expiry dates; append-only `stock_ledger` `INWARD` entries; stock query endpoints (`/stock/on-hand`, `/stock/batches`, `/stock/ledger`).
+- **Verification Gate:** Core inventory invariant test passes: `SUM(stock_ledger.quantity_delta) == SUM(stock_batches.quantity_available)` for every SKU and store; parallel inward creations generate strictly collision-safe unique barcodes.
+
+---
+
+### Milestone B8: POS Buckets & Cart Tax Preview (B8)
+- **Scope:** Held buckets management (`BKT-01`, `BKT-02`); `POST /invoices/preview` server-side calculation engine implementing Indian GST rules with `decimal.js`.
+- **Verification Gate:** Preview calculation totals match hand-calculated test cases in `TAX_GST_RULES.md` across intra-state (CGST+SGST), inter-state (IGST), tax-inclusive, tax-exclusive, and rounding configurations.
+
+---
+
+### Milestone B9: Atomic Invoice Checkout & Concurrency Controls (B9)
+- **Scope:** Transactional checkout (`POST /invoices`); `Idempotency-Key` validation; First-Expiry, First-Out (**FEFO**) batch allocation; row-locked sequential gapless invoice numbering; payment recording; stock decrements; `SALE` ledger logging; outbox dispatch.
+- **Verification Gate:** Concurrency tests pass: 50 parallel checkouts generate 50 unique, gapless, ordered invoice numbers without deadlocks; two cashiers racing for the final stock unit results in exactly one success and one `STOCK_INSUFFICIENT` 409 error; retry with identical `Idempotency-Key` returns original invoice.
+
+---
+
+### Milestone B10: Invoice Inquiries, Cancellation & A4 Tax PDF (B10)
+- **Scope:** Paginated invoice queries with filters; `POST /invoices/:id/cancel` atomic reversal (restores stock batches, writes `SALE_CANCEL` ledger rows, refunds tender, records audit log); A4 Tax Invoice printable data generator.
+- **Verification Gate:** Soft-cancellation restores stock batch counts to exact prior levels; double-cancellation rejected (`INVALID_STATE`); cancelled invoice numbers are never reused.
+
+---
+
+### Milestone B11: Asynchronous WhatsApp Outbox & OpenWA Integration (B11)
+- **Scope:** Background polling worker processing `whatsapp_outbox` rows via `FOR UPDATE SKIP LOCKED`; server-to-server HTTP dispatch to OpenWA with exponential backoff (max 5 retries); failure isolation.
+- **Verification Gate:** Simulating OpenWA gateway failure allows invoice creation to complete normally; outbox records retry up to 5 times and transition to `FAILED` with error log; gateway recovery successfully drains pending queue.
+
+---
+
+### Milestone B12: Material Returns & Inventory Adjustments (B12)
+- **Scope:** Vendor return notes linked to return reasons; batch stock reduction; `VENDOR_RETURN` ledger rows; audited stock adjustments (`POST /stock/adjustments`) for shrinkage or spoilage.
+- **Verification Gate:** Over-return beyond available batch quantity rejected; ledger invariant holds after returns and adjustments.
+
+---
+
+### Milestone B13: Executive Dashboard & Reporting Hub (B13)
+- **Scope:** Aggregated dashboard summary; Daily Sales report (cash/UPI split, tax total); Vendor-Wise Sales performance; Vendor-Wise Expired Stock audit; streaming CSV generation.
+- **Verification Gate:** Aggregated report outputs match direct raw SQL calculation sums over test databases; CSV streaming export completes cleanly.
+
+---
+
+### Milestone B14: React Frontend Integration (`POSUI` ↔ Backend) (B14)
+- **Scope:** Deploy Axios `src/_api/httpClient.js` with automatic refresh token interceptor; build `src/_api/mappers/*` bidirectional data mappers; wire JWT session restoration in `AuthContext`; connect POS cart preview; route WhatsApp dispatch through backend; update `run-all.ps1`.
+- **Verification Gate:** `npm run build` in `POSUI` completes with **zero errors and zero warnings**; zero remaining `firebase` imports; manual smoke test passes across all screens; token refresh works without logout loops; RBAC screen restrictions verified.
+
+---
+
+### Milestone B15: System Hardening, Disaster Recovery Drill & Audit (B15)
+- **Scope:** Production readiness checklist; security audit; simulated database backup and recovery drill using `pg_dump` into a scratch database; documentation consistency check.
+- **Verification Gate:** Final audit checklist achieves 100% PASS rating; database restore drill restores all transactions in $< 15\text{ minutes}$.
+
+---
+
+### Milestone B16: (Optional) Legacy Firestore-to-PostgreSQL Data Migration (B16)
+- **Scope:** Standalone Node.js script extracting legacy Firestore JSON/collections and loading them into PostgreSQL with identifier mapping.
+- **Verification Gate:** Row counts and monetary sales totals reconcile 100% between source and target datasets.

@@ -1,59 +1,60 @@
 # Quality Assurance & Testing Strategy Specification: POS & Billing System
 
-## 1. Testing Pyramid & Methodology
-The testing architecture balances rapid developer feedback with strict security and financial correctness guarantees.
+## 1. Testing Pyramid & Principles
+The testing framework guarantees strict correctness across financial math, concurrency control, and inventory integrity. **The database is never mocked in integration or concurrency tests**; all tests execute against a real PostgreSQL 16 container.
 
 ```mermaid
 pie title Test Distribution Strategy
-    "Security Rules & Emulator Tests" : 35
-    "Unit Tests (Services & Utilities)" : 30
-    "Integration & UI Component Tests" : 25
-    "End-to-End POS Workflows" : 10
+    "Concurrency & Race Condition Tests" : 20
+    "Integration Tests (Supertest + Real Postgres)" : 35
+    "Unit Tests (GST Math, decimal.js, Mappers, DTOs)" : 30
+    "End-to-End POS UI Workflows & Contract Tests" : 15
 ```
 
 ---
 
-## 2. Testing Levels & Tooling
+## 2. Test Suites & Methodologies
 
-### 2.1 Unit Tests (Jest & React Testing Library)
+### 2.1 Unit Tests (Jest)
 - **Scope:**
-  - Pure calculation functions (`calculateGst`, `roundOffCurrency`, `formatIndianCurrency`).
-  - Formik + Yup schema validations (GSTIN regex, shelf life validation, required phone formats).
-  - Redux slice reducers (`cartSlice`, `heldBucketsSlice`).
-- **Tooling:** `jest`, `@testing-library/react`, `@testing-library/user-event`.
+  - Financial calculations (`decimal.js`): GST intra-state 50/50 splits, inter-state IGST, tax-inclusive reverse calculations, round-off rounding logic.
+  - DTO validation pipes (`class-validator`): checking regex for GSTIN, positive quantity limits, mandatory shelf-life days when `is_exp_date = true`.
+  - Frontend bidirectional mappers (`src/_api/mappers/*`): verifying lossless round-trip transformations between backend `camelCase` and legacy `PascalCase`.
+- **Target:** 100% branch coverage on financial arithmetic and tax calculation utilities.
 
-### 2.2 Firestore Emulator Suite & Security Rules Tests
-Because security lives directly in `firestore.rules`, all security assertions are validated against the **Firebase Emulator Suite** (`@firebase/rules-unit-testing`):
-- **Assertions Tested:**
-  - Cashiers cannot read vendor or purchase order documents.
-  - Inventory Managers cannot read invoices or customer details.
-  - Finalized invoices cannot have their rates, tax, or amounts altered by any role.
-  - Unauthenticated requests are rejected across all paths.
-  - Hard deletions return permission-denied.
+### 2.2 Integration Tests (Supertest + Real PostgreSQL)
+- **Scope:**
+  - Master data CRUD and soft-deletion behavior.
+  - Authentication flows: argon2id password verification, lockout after 5 failed logins, JWT refresh rotation, token reuse detection revoking token family.
+  - Granular RBAC enforcement: scanning all registered endpoints to assert 401 without Bearer token and 403 when role lacks the module/action permission.
+  - Material inward processing creating `stock_batches` with unique thermal barcodes and `INWARD` ledger entries.
+  - Invoice soft-cancellation reversing batch stock and refunding payment.
 
-### 2.3 UI & Component Integration Tests
-- Validates Mantis components, tables, filters, and modals.
-- Verifies loading skeleton display, empty state illustrations, and error banners.
-- Tests keyboard event listeners (`F2`, `F8`, `F9`) in the POS terminal component.
+### 2.3 Concurrency & Race Condition Tests
+These tests validate mission-critical transactional guarantees under high-concurrency store rush conditions:
+1. **Parallel Invoice Numbering (Gapless Guarantee):**
+   - 50 simultaneous checkouts executed in parallel for a single store.
+   - **Assertion:** 50 unique, gapless, sequential numbers generated (e.g., `000101` to `000150`) with zero deadlocks and zero duplicate key conflicts.
+2. **FEFO Stock Race Condition (Last Unit Check):**
+   - Two cashiers simultaneously checkout the final 1 available unit of an item.
+   - **Assertion:** Exactly one checkout succeeds (HTTP 201); the other is rejected with HTTP 409 `STOCK_INSUFFICIENT`.
+3. **Idempotency Protection:**
+   - 10 parallel requests dispatched with the exact same `Idempotency-Key` UUID.
+   - **Assertion:** Exactly 1 invoice is inserted; all 10 calls receive identical HTTP 200/201 responses with the same document number.
+4. **Inventory Ledger Invariant Test:**
+   - Executed after complex multi-step workflows (inward, sales, cancellations, returns).
+   - **Invariant:** `SUM(stock_ledger.quantity_delta) == SUM(stock_batches.quantity_available)` for every SKU and store.
 
-### 2.4 End-to-End (E2E) Flow Tests (Cypress / Playwright)
-- **Primary Scenarios:**
-  1. Login -> Open Terminal -> Scan Barcode -> Add Customer -> Tender Cash -> Generate Invoice -> Verify PDF.
-  2. Create PO -> Process Material Inward -> Verify Generated Barcodes.
-  3. Admin Invoice Soft-Cancellation -> Verify CANCELLED watermark and reason.
+### 2.4 API Contract Verification Tests
+- Generates OpenAPI schema via `@nestjs/swagger` into `docs/openapi.json`.
+- Automated test verifies that every function in `POSUI/src/_api/*` maps to an existing endpoint, matching HTTP method, path, request parameters, and response attributes.
 
 ---
 
-## 3. Performance & Accessibility Testing
-- **Lighthouse CI:** Integrated into GitHub Actions; enforces minimum score of `90` on Accessibility, Best Practices, and Performance.
-- **Axe-Core:** Automated ARIA checks ensuring no missing `aria-label` or contrast violations.
-
----
-
-## 4. Continuous Integration (CI) Pipeline
-- **Triggers:** Pull requests to `main` and `develop`.
-- **Pipeline Stages:**
-  1. `Lint & Formatting`: ESLint and Prettier checks.
-  2. `Security Rules Unit Tests`: Spawns Firebase Emulator in Docker, executes `@firebase/rules-unit-testing`.
-  3. `Frontend Unit Tests`: Jest test run with code coverage report (minimum 80% branch coverage required for financial math utilities).
-  4. `Production Build Check`: Validates Webpack build with legacy OpenSSL flag.
+## 3. Code Coverage & Quality Thresholds
+Every pull request must satisfy these minimum quality gates:
+- Minimum **80% line and branch coverage** across `invoices`, `stock`, `auth`, and `common/utils`.
+- `tsc --noEmit` exits with **0 errors** in TypeScript strict mode.
+- ESLint exits with **0 errors and 0 warnings**.
+- Zero usage of `any` type in application TypeScript code.
+- Zero raw `console.log` statements (structured `pino` logger used exclusively).

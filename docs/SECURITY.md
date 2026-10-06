@@ -1,159 +1,107 @@
 # Security Architecture & Rules Specification: POS & Billing System
 
 ## 1. Threat Model & Security Posture
-Because this application features a direct client-to-Firestore connection without an intermediary proprietary backend server, **Google Cloud Firestore Security Rules are the primary and authoritative boundary of defense**. Client-side route guards and UI button disabling are strictly user-experience conveniences and provide zero security guarantee.
+With the introduction of the dedicated NestJS backend, **all security and authorization boundaries are enforced exclusively on the server**. Client-side route guards and disabled UI components serve strictly as user-experience conveniences.
 
----
-
-## 2. Firestore Security Rules Architecture (`firestore.rules`)
-
-### 2.1 Core Security Invariants
-1. **Unauthenticated Access Denial:** All unauthenticated read and write requests are rejected immediately (`request.auth != null`).
-2. **Role Verification:** User roles are verified by inspecting the user's role document or custom auth claims.
-3. **Soft-Delete Protection:** Physical document deletion (`delete`) is universally forbidden. Modifications to `RecordStatus` are audited.
-4. **Finalized Invoice Immutability:** Once an `InvoiceHeader` or `InvoiceDetails` document is created, its core financial amounts (`Amount`, `Rate`, `TaxRateId`, `IGST`, `CGST`, `SGST`) cannot be edited or modified. Only `RecordStatus` and `CancellationReason` may be updated by an Admin.
-5. **Audit Invariance:** Writes must preserve `Created` and `CreatedId`. `Updated` must match the server request time.
-
-### 2.2 Concrete Security Rules Definition
-```javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    
-    // Helper functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function getUserRole() {
-      return get(/databases/$(database)/documents/RolesAndPermissions/$(request.auth.uid)).data.Role;
-    }
-    
-    function isAdmin() {
-      return isAuthenticated() && (getUserRole() == 'Admin' || request.auth.token.role == 'Admin');
-    }
-    
-    function isCashier() {
-      return isAuthenticated() && (getUserRole() == 'Cashier' || request.auth.token.role == 'Cashier');
-    }
-    
-    function isInventoryManager() {
-      return isAuthenticated() && (getUserRole() == 'Inventory Manager' || request.auth.token.role == 'Inventory Manager');
-    }
-
-    // Stores, TaxRates, Settings: Read by all authenticated staff, write by Admin only
-    match /Stores/{storeId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-    match /TaxRates/{taxRateId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-    match /Settings/{settingId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-    
-    // Roles and Permissions: Read by all authenticated staff, write exclusively by Admin
-    match /RolesAndPermissions/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-    
-    // Products and Categories: Read by all, manage by Admin and Inventory Manager
-    match /Products/{productId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isInventoryManager();
-      allow delete: if false; // Soft delete only
-    }
-    match /ProductCategory/{catId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isInventoryManager();
-      allow delete: if false;
-    }
-
-    // Vendors & Purchase Orders: Admin and Inventory Manager only
-    match /Vendors/{vendorId} {
-      allow read, write: if isAdmin() || isInventoryManager();
-      allow delete: if false;
-    }
-    match /PurchaseOrderHeader/{poId} {
-      allow read, write: if isAdmin() || isInventoryManager();
-    }
-    match /PurchaseOrderDetails/{detailId} {
-      allow read, write: if isAdmin() || isInventoryManager();
-    }
-    
-    // Material Inward & Barcodes
-    match /MaterialInwardHeader/{inwardId} {
-      allow read, write: if isAdmin() || isInventoryManager();
-    }
-    match /MaterialInwardDetails/{detailId} {
-      allow read, write: if isAdmin() || isInventoryManager();
-    }
-    match /MaterialInwardBarcodes/{barcodeId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin() || isInventoryManager();
-    }
-    
-    // Customers: Cashier and Admin can create/read/update
-    match /Customers/{customerId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || isCashier();
-      allow delete: if false;
-    }
-    
-    // Buckets: Cashier and Admin
-    match /BucketHeader/{bucketId} {
-      allow read, write: if isAdmin() || isCashier();
-    }
-    match /BucketDetails/{detailId} {
-      allow read, write: if isAdmin() || isCashier();
-    }
-
-    // Invoices: Read by all authenticated; Create by Cashier/Admin; Modification locked down
-    match /InvoiceHeader/{invoiceId} {
-      allow read: if isAuthenticated();
-      allow create: if (isAdmin() || isCashier()) && request.resource.data.RecordStatus == 0;
-      // Invoices can never be edited except for cancellation flag by Admin
-      allow update: if isAdmin() 
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['RecordStatus', 'CancellationReason', 'Updated', 'UpdatedId'])
-        && request.resource.data.RecordStatus == 1;
-      allow delete: if false; // Hard delete strictly forbidden
-    }
-    match /InvoiceDetails/{detailId} {
-      allow read: if isAuthenticated();
-      allow create: if (isAdmin() || isCashier()) && request.resource.data.RecordStatus == 0;
-      allow update, delete: if false; // Details are immutable
-    }
-
-    // Counters: Internal atomic transactions
-    match /Counters/{counterId} {
-      allow read, write: if isAuthenticated();
-    }
-  }
-}
+```mermaid
+graph TD
+    Client[Incoming Client Request] --> RateLimiter[Throttler Rate Limiter Guard]
+    RateLimiter --> HelmetPipes[Helmet Security Headers & ValidationPipe]
+    HelmetPipes --> JwtAuthGuard[JwtAuthGuard: Bearer Token & Expiry Check]
+    JwtAuthGuard --> StoreScopeGuard[StoreScopeGuard: Assigned Store Verification]
+    JwtAuthGuard --> PermissionsGuard[PermissionsGuard: RBAC Module & Action Check]
+    PermissionsGuard --> Controller[Controller & Business Services]
+    Controller --> PrismaService[Prisma Client: Parameterized SQL]
+    PrismaService --> PostgreSQL[(PostgreSQL Database)]
 ```
 
 ---
 
-## 3. Firebase Authentication Hardening
-1. **Authorized Domains:** Remove `localhost` in production Firebase Console. Restrict strictly to the registered store domain (e.g., `pos.dailymart.in`).
-2. **Password Policy:** Enforce minimum 8 characters, requiring at least one numeric digit and one uppercase letter.
-3. **Session Revocation:** Trigger token revocation upon role demotion or account deactivation.
-4. **App Check:** Integrate Google reCAPTCHA v3 or Firebase App Check to block unauthorized automated bots from querying Firestore directly.
+## 2. Authentication Security
+
+### 2.1 Password Hashing & Storage
+- Passwords are encrypted using **`argon2id`** (memory cost 65536 KiB, time cost 3, parallelism 4).
+- Raw passwords and weak hashes (MD5, SHA-1, plain bcrypt) are strictly prohibited.
+
+### 2.2 Account Lockout & Brute-Force Defense
+- **Failed Login Threshold:** 5 consecutive failed login attempts locks the account for **15 minutes**.
+- **User Enumeration Prevention:** Error messages for invalid credentials are completely generic: `"Invalid email or password"`. The system returns identical response timing and status codes whether an email exists or not.
+- Rate limiting on `/auth/login` and `/auth/refresh` is enforced strictly at **5 requests per minute per IP**.
+
+### 2.3 JWT Lifecycle & Refresh Token Rotation
+- **Access Tokens:** Signed with `JWT_ACCESS_SECRET` (minimum 32 random bytes), 15-minute expiration time. Contains payload: `{ sub: userId, role: roleName, stores: [storeId] }`.
+- **Refresh Tokens:** Signed with a separate `JWT_REFRESH_SECRET`, 7-day expiration time.
+  - Stored in an **`httpOnly; Secure; SameSite=Lax`** cookie to block Cross-Site Scripting (XSS) extraction.
+  - Stored in the database as an irreversible **SHA-256 hash** (`token_hash`).
+  - **Automatic Rotation & Reuse Detection:** Every invocation of `POST /auth/refresh` immediately invalidates the old refresh token and issues a new one. If an invalidated refresh token is ever presented (indicating token theft), **the entire family of tokens for that user is instantly revoked**, forcing re-authentication.
+
+### 2.4 Google OAuth Verification
+- The frontend obtains an ID token via Google Identity Services and sends it to `POST /auth/google`.
+- The backend verifies token signature, audience (`GOOGLE_CLIENT_ID`), issuer, and expiry using `google-auth-library`.
+- Matching occurs on `google_sub` or a verified email associated with a **pre-created staff user**.
+- **Zero Self-Escalation:** Unknown Google accounts are never granted staff roles; they are rejected with 403 unless `ALLOW_SELF_SIGNUP=true` is explicitly enabled in store settings.
 
 ---
 
-## 4. OpenWA Gateway Isolation
-The local WhatsApp gateway (`OpenWA`) runs on local ports (API: 2785, Dashboard: 2886).
-- **Network Binding:** Bind HTTP listeners strictly to `127.0.0.1` (localhost). Never bind to `0.0.0.0` or expose port 2785 over public WAN without reverse-proxy authentication.
-- **API Token Authentication:** Every HTTP request to `http://localhost:2785` must pass an `Authorization: Bearer <TOKEN>` header verified by a NestJS guard.
-- **PII Scrubbing:** Log files in OpenWA must mask customer mobile numbers (`+91 98765*****`) to safeguard customer privacy.
+## 3. Role-Based Access Control (RBAC) & Authorization
+
+### 3.1 Role Hierarchy & Deny-by-Default Guard
+Only three authenticated roles exist:
+1. **`ADMIN`:** Unrestricted administrative, financial, and user management authority.
+2. **`CASHIER`:** Restricted to checkout, customer registration, own invoice history, and product browsing.
+3. **`INVENTORY_MANAGER`:** Restricted to supply chain, inward, purchasing, returns, stock batches, and expiry reports.
+- **External Vendors:** Vendors have **no user credentials or system access**.
+
+### 3.2 Granular Permissions Matrix
+Enforced on endpoints using the custom `@RequirePermission(module, action)` decorator:
+```typescript
+@UseGuards(JwtAuthGuard, PermissionsGuard, StoreScopeGuard)
+@RequirePermission('INVOICES', 'APPROVE')
+@Post(':id/cancel')
+async cancelInvoice(...) { ... }
+```
+- **Deny-by-Default:** Any endpoint lacking an explicit permission decorator is automatically rejected by the global `PermissionsGuard`.
+- **Store-Scoping:** `StoreScopeGuard` verifies that the `store_id` targeted in the request exists in the user's assigned store permissions (`user_stores`), preventing cross-branch data tampering.
 
 ---
 
-## 5. Input Validation & XSS Defense
-- **Formik + Yup:** All user inputs (especially Free-text notes, Customer Name, and Address) undergo strict sanitization to neutralize script injection risks before writing to Firestore.
-- **Receipt Template Encoding:** Receipt strings constructed for WhatsApp and PDF generation are plain-text formatted and strip HTML/JavaScript tags.
+## 4. API & Application Hardening
+
+### 4.1 Security Headers (`helmet`)
+- Enforces HTTP Strict Transport Security (`HSTS`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and Content Security Policy (`CSP`).
+
+### 4.2 Cross-Origin Resource Sharing (CORS)
+- Strict origin matching against `CORS_ORIGINS` (e.g., `http://localhost:3000`).
+- Wildcards (`*`) are prohibited; `credentials: true` is strictly enforced.
+
+### 4.3 DTO Validation & Injection Defense
+- NestJS global `ValidationPipe` with:
+  ```typescript
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true
+  })
+  ```
+- Strips any extraneous properties injected by malicious clients.
+- Rejects unexpected fields with HTTP 400.
+- All database queries are executed via Prisma's parameterized engine or prepared raw SQL queries. String concatenation in queries is strictly prohibited.
+
+---
+
+## 5. Privacy, Logging & Audit Trail
+
+### 5.1 Structured Logging & PII Redaction (`nestjs-pino`)
+- All server logs are formatted as structured JSON.
+- **PII Redaction Rules:** Customer mobile numbers, customer emails, passwords, bearer tokens, and PAN/Aadhaar/GST numbers are automatically redacted with `[REDACTED]` tokens prior to writing to disk.
+
+### 5.2 Immutable Audit Logs (`audit_logs`)
+The backend automatically inserts an immutable `audit_logs` record for all sensitive actions:
+- Authentication events (`LOGIN`, `LOGOUT`, `FAILED_LOGIN`, `LOCKOUT`).
+- Financial operations (`INVOICE_CREATE`, `INVOICE_CANCEL`).
+- Inventory mutations (`STOCK_ADJUSTMENT`, `MATERIAL_RETURN`).
+- User governance (`ROLE_CHANGE`, `USER_CREATE`, `USER_DEACTIVATE`).
+
+### 5.3 Database Least Privilege
+- In production, the backend database user has permissions restricted to `SELECT`, `INSERT`, `UPDATE`, `DELETE` on public tables.
+- Table creation, alteration, and dropping (`DDL`) permissions are held by a separate migration deployment role.

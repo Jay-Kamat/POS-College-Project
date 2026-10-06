@@ -24,10 +24,12 @@ import {
   Print as PrintIcon,
   WhatsApp as WhatsAppIcon,
   CancelOutlined as CancelIcon,
-  ArrowBack as BackIcon
+  ArrowBack as BackIcon,
+  ReceiptLong as ThermalIcon
 } from '@mui/icons-material';
 import invoiceService from '../../../_api/invoiceService';
 import whatsappService from '../../../_api/whatsappService';
+import { printThermalReceipt, printA4Invoice } from '../../../utils/printService';
 
 export default function InvoiceDetail() {
   const { id } = useParams();
@@ -80,13 +82,27 @@ export default function InvoiceDetail() {
   return (
     <Box>
       {/* Top Header Navigation */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+      <Box className="no-print" sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Button startIcon={<BackIcon />} onClick={() => navigate('/apps/invoice')} sx={{ color: '#4B5563' }}>
           Back to Invoices
         </Button>
-        <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<PrintIcon />}
+            onClick={() => printA4Invoice(invoice)}
+            sx={{ fontWeight: 600, bgcolor: '#3B5BDB', '&:hover': { bgcolor: '#2B44B8' } }}
+          >
             Print A4 Invoice
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<ThermalIcon />}
+            onClick={() => printThermalReceipt(invoice)}
+            sx={{ fontWeight: 600 }}
+          >
+            Print Thermal (80mm)
           </Button>
           {invoice.MobileNumber && (
             <Button

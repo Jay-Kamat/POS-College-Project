@@ -75,6 +75,7 @@ export default function MainLayout() {
       {/* Top Application Bar */}
       <AppBar
         position="fixed"
+        className="no-print"
         sx={{
           zIndex: (theme) => theme.zIndex.drawer + 1,
           bgcolor: '#FFFFFF',
@@ -163,6 +164,7 @@ export default function MainLayout() {
       {/* Collapsible Left Navigation Drawer */}
       <Drawer
         variant="permanent"
+        className="no-print"
         sx={{
           width: open ? DRAWER_WIDTH : 64,
           flexShrink: 0,

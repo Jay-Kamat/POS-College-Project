@@ -13,6 +13,16 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// GET /api/stores/profile
+router.get('/profile', async (req, res, next) => {
+  try {
+    const store = await db.getStoreProfile();
+    return res.json({ status: 'success', data: store, all: store ? [store] : [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PUT /api/stores/:id
 router.put('/:id', async (req, res, next) => {
   try {

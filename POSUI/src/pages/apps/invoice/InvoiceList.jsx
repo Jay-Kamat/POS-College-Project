@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Paper,
@@ -20,23 +21,33 @@ import {
   DialogActions,
   Snackbar,
   Alert,
-  Tooltip
+  Tooltip,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText
 } from '@mui/material';
 import {
   Search as SearchIcon,
   CancelOutlined as CancelIcon,
   Print as PrintIcon,
   WhatsApp as WhatsAppIcon,
-  Receipt as ReceiptIcon
+  Receipt as ReceiptIcon,
+  ReceiptLong as ThermalIcon,
+  Description as A4Icon,
+  Visibility as ViewIcon
 } from '@mui/icons-material';
 import invoiceService from '../../../_api/invoiceService';
 import whatsappService from '../../../_api/whatsappService';
+import { printThermalReceipt, printA4Invoice } from '../../../utils/printService';
 
 export default function InvoiceList() {
+  const navigate = useNavigate();
   const [invoices, setInvoices] = useState([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'active' | 'cancelled'
   
+  const [printAnchor, setPrintAnchor] = useState({ el: null, invoice: null });
   const [cancelModal, setCancelModal] = useState({ open: false, invoice: null, reason: '' });
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
 
@@ -183,8 +194,12 @@ export default function InvoiceList() {
                     )}
                   </TableCell>
                   <TableCell align="center">
-                    <Tooltip title="Print Slip">
-                      <IconButton size="small" onClick={() => window.print()} sx={{ color: '#4B5563' }}>
+                    <Tooltip title="Print Options">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => setPrintAnchor({ el: e.currentTarget, invoice: inv })}
+                        sx={{ color: '#3B5BDB', '&:hover': { bgcolor: '#EEF2FF' } }}
+                      >
                         <PrintIcon sx={{ fontSize: 18 }} />
                       </IconButton>
                     </Tooltip>
@@ -244,6 +259,47 @@ export default function InvoiceList() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Print Options Dropdown Menu */}
+      <Menu
+        anchorEl={printAnchor.el}
+        open={Boolean(printAnchor.el)}
+        onClose={() => setPrintAnchor({ el: null, invoice: null })}
+        PaperProps={{ sx: { width: 260, borderRadius: 2, boxShadow: '0 8px 24px rgba(0,0,0,0.12)' } }}
+      >
+        <Typography variant="caption" sx={{ px: 2, py: 1, display: 'block', color: '#6B7280', fontWeight: 700 }}>
+          {printAnchor.invoice?.DocumentNumber} PRINT OPTIONS
+        </Typography>
+        <MenuItem
+          onClick={() => {
+            printThermalReceipt(printAnchor.invoice);
+            setPrintAnchor({ el: null, invoice: null });
+          }}
+        >
+          <ListItemIcon><ThermalIcon fontSize="small" sx={{ color: '#F59F00' }} /></ListItemIcon>
+          <ListItemText primary="Print Thermal (80mm)" secondary="Fast POS counter slip" />
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            printA4Invoice(printAnchor.invoice);
+            setPrintAnchor({ el: null, invoice: null });
+          }}
+        >
+          <ListItemIcon><A4Icon fontSize="small" sx={{ color: '#3B5BDB' }} /></ListItemIcon>
+          <ListItemText primary="Print A4 Tax Invoice" secondary="Full GST compliant invoice" />
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (printAnchor.invoice?.Id) {
+              navigate(`/apps/invoice/${printAnchor.invoice.Id}`);
+            }
+            setPrintAnchor({ el: null, invoice: null });
+          }}
+        >
+          <ListItemIcon><ViewIcon fontSize="small" sx={{ color: '#4B5563' }} /></ListItemIcon>
+          <ListItemText primary="View Full Document" secondary="Inspect line items" />
+        </MenuItem>
+      </Menu>
 
       {/* Toast Alert */}
       <Snackbar

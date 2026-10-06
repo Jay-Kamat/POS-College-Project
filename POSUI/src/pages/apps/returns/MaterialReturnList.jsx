@@ -27,6 +27,7 @@ import { Add as AddIcon, AssignmentReturn as ReturnIcon, Print as PrintIcon } fr
 import returnService from '../../../_api/returnService';
 import vendorService from '../../../_api/vendorService';
 import productService from '../../../_api/productService';
+import { printDebitNote } from '../../../utils/printService';
 
 export default function MaterialReturnList() {
   const [returnNotes, setReturnNotes] = useState([]);
@@ -144,7 +145,7 @@ export default function MaterialReturnList() {
                   <Chip label={note.Status} size="small" sx={{ bgcolor: '#EBFBEE', color: '#2F9E44', fontWeight: 600 }} />
                 </TableCell>
                 <TableCell align="center">
-                  <Button size="small" startIcon={<PrintIcon />} onClick={() => window.print()} sx={{ fontSize: 12 }}>
+                  <Button size="small" startIcon={<PrintIcon />} onClick={() => printDebitNote(note)} sx={{ fontSize: 12 }}>
                     Print Debit Note
                   </Button>
                 </TableCell>

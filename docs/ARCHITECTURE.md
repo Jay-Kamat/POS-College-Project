@@ -1,126 +1,104 @@
 # System Architecture Specification: POS & Billing System
 
 ## 1. High-Level Architecture Overview
-The system employs a client-centric single-page application (SPA) architecture integrating directly with Google Cloud Firestore and Firebase Authentication via the Firebase Web SDK v9/v10 modular API. Outbound WhatsApp communication is decoupled via a local microservice gateway (`OpenWA`).
+The POS & Billing System employs a decoupled, multi-tier client-server architecture with a high-performance React Single Page Application (`POSUI`) at the presentation layer, a modular **NestJS** backend REST API (`backend`), **PostgreSQL 16** as the ACID-compliant relational data store with Prisma ORM, and a dedicated **OpenWA** WhatsApp gateway microservice communicating server-to-server via an asynchronous outbox pattern.
 
 ```mermaid
-graph TB
-    subgraph Client_Tier [Client Tier: POSUI - Port 3000]
-        UI[React 18 Mantis UI Components]
-        ReduxStore[Redux Toolkit Store\nCart, Session, UI State]
-        ServiceLayer[Service Layer\nsrc/_api Firestore SDK]
-        WAClient[OpenWA HTTP Client\nAxios / Fetch]
-        PDFGen[@react-pdf/renderer\nClient Invoice PDF]
+graph TD
+    subgraph Presentation_Layer [Presentation Tier: POSUI - Port 3000]
+        UI[React 18 Mantis UI]
+        ReduxStore[Redux Toolkit Store]
+        MapperLayer[Bidirectional Mappers\nsrc/_api/mappers/*]
+        HTTPClient[Axios HTTP Client\nsrc/_api/httpClient.js]
     end
 
-    subgraph Firebase_Cloud [Google Firebase & Cloud Firestore]
-        FirebaseAuth[Firebase Authentication\nGoogle OAuth & Email/Pass]
-        SecurityRules[Firestore Security Rules\nCollection & Field Level RBAC]
-        FirestoreDB[(Cloud Firestore\nNoSQL Database)]
+    subgraph Backend_Layer [Backend API Tier: NestJS - Port 4000]
+        GlobalPipes[ValidationPipe & Filters]
+        AuthModule[Auth & RBAC Guards\nJWT + argon2id]
+        BusinessLogic[Domain Services\nGST, FEFO, Invoicing, Stock]
+        PrismaORM[Prisma Client + Raw SQL]
+        OutboxWorker[WhatsApp Outbox Worker\nPolls whatsapp_outbox]
     end
 
-    subgraph WhatsApp_Gateway [Local WhatsApp Gateway - OpenWA]
-        NestServer[NestJS HTTP Server\nAPI Port 2785 / Dashboard Port 2886]
-        BaileysCore[WhatsApp Engine\nwhiskeysockets/baileys / whatsapp-web.js]
+    subgraph Persistence_Layer [Persistence Tier - Port 5432]
+        PostgreSQL[(PostgreSQL 16\npos_billing_db)]
     end
 
-    subgraph External_Network [Customer & Store Peripherals]
-        BarcodeScanner[HID Keyboard-Wedge Scanner]
-        ThermalPrinter[USB / ESC-POS Thermal Printer]
-        CustomerPhone[Customer WhatsApp App]
+    subgraph External_Services [External & Microservices]
+        OpenWA[OpenWA Gateway :2785\nREST API]
+        GoogleAuth[Google Identity Services\nOAuth ID Token Verification]
+        WhatsAppNetwork[Customer WhatsApp Device]
     end
 
-    %% Interactions
-    BarcodeScanner -.->|Keystroke Stream| UI
+    %% Communications
     UI --> ReduxStore
-    UI --> ServiceLayer
-    UI --> WAClient
-    UI --> PDFGen
-    PDFGen --> ThermalPrinter
-
-    ServiceLayer -->|Auth Tokens / Sessions| FirebaseAuth
-    ServiceLayer -->|Modular Reads/Writes via TLS| SecurityRules
-    SecurityRules --> FirestoreDB
-
-    WAClient -->|POST /send-message JSON| NestServer
-    NestServer --> BaileysCore
-    BaileysCore -->|Encrypted Protocol| CustomerPhone
+    ReduxStore --> MapperLayer
+    MapperLayer --> HTTPClient
+    HTTPClient -->|HTTPS REST /api/v1 + Bearer JWT| GlobalPipes
+    GlobalPipes --> AuthModule
+    AuthModule --> BusinessLogic
+    BusinessLogic --> PrismaORM
+    PrismaORM -->|Connection Pool & Row Locks| PostgreSQL
+    BusinessLogic -.->|Enqueues Outbox Row| PostgreSQL
+    OutboxWorker -->|SELECT ... FOR UPDATE SKIP LOCKED| PostgreSQL
+    OutboxWorker -->|Server-to-Server REST POST| OpenWA
+    OpenWA -->|Encrypted Protocol| WhatsAppNetwork
+    AuthModule -->|Verify ID Token| GoogleAuth
 ```
 
 ---
 
-## 2. Request and Data Lifecycle
+## 2. Core Architectural Principles & Invariants
 
-### 2.1 Direct-to-Firestore Data Flow
-1. **User Interaction:** Cashier actions (e.g., scanning a product barcode) dispatch Redux actions or trigger view-model hooks.
-2. **API Service Abstraction (`src/_api/`):** View components never import `firebase/firestore` directly. All operations route through dedicated modular service modules (e.g., `src/_api/invoiceService.js`, `src/_api/productService.js`).
-3. **Firestore Security Verification:** Each read/write is evaluated against `firestore.rules` using the authenticated user's Firebase token claims (`request.auth.uid`, role verification document lookups).
-4. **Optimistic Updates & Cache:** The Firestore SDK handles local client indexing and offline caching. Changes sync automatically when a connection is active.
+### 2.1 Server is the Single Source of Truth
+- **Never Trust Client Data:** Product selling prices, tax slabs, GST splits, invoice numbers, stock quantities, and user identities are derived and finalized strictly on the backend.
+- The client cart sends item identifiers and requested quantities; `POST /invoices/preview` and `POST /invoices` evaluate actual database rates and calculate all financial figures.
+- User identity (`created_by`, `updated_by`) and store scope (`store_id`) are extracted from the verified JWT payload, never from request body parameters.
 
-### 2.2 OpenWA Communication Flow
-1. Upon successful creation of an invoice in Firestore, `POSUI` checks `InvoiceHeader.IsShareReceiptThroughSms` and customer mobile number.
-2. An asynchronous HTTP POST request is dispatched to `http://localhost:2785/api/v1/messages/send-text` with an authentication bearer token.
-3. The NestJS gateway handles format validation, international phone formatting (`+91` prefixing), and transmits the payload over the active socket session.
-4. If OpenWA is unreachable, the UI traps the network exception gracefully, flags the invoice receipt dispatch as failed in local state, and prompts the cashier with a "Retry WhatsApp" button without interrupting the billing flow.
+### 2.2 Financial Arithmetic & Precision (`decimal.js`)
+- JavaScript IEEE 754 floating-point arithmetic is strictly prohibited for financial operations.
+- All pricing, tax rates, line calculations, round-offs, and ledger sums are calculated using `decimal.js`.
+- Database storage utilizes `numeric(14,2)` for monetary values, `numeric(5,2)` for tax percentages, and `numeric(14,3)` for item quantities (supporting fractional weights).
 
----
+### 2.3 Atomicity, Transactions & Concurrency Control
+Multi-table writes always execute within a single PostgreSQL transaction (`prisma.$transaction` or explicit `BEGIN ... COMMIT`):
+1. **Invoice Creation (`POST /invoices`):**
+   - Batches locked and allocated using First-Expiry, First-Out (**FEFO**) via `SELECT ... FOR UPDATE`.
+   - Sequential gapless invoice numbering locked via `SELECT ... FOR UPDATE` on `invoice_number_sequences`.
+   - Atomically decrements `stock_batches`, writes `stock_ledger` `SALE` rows, inserts `invoices`, `invoice_items`, `payments`, and enqueues a `whatsapp_outbox` record.
+2. **Invoice Cancellation (`POST /invoices/:id/cancel`):**
+   - Locks invoice row, updates status to `CANCELLED`, restores allocated batch quantities, appends `SALE_CANCEL` rows to `stock_ledger`, and flags payment as `REFUNDED`.
+   - Invoice numbers are permanently retired and never reused.
 
-## 3. Real-Time Listeners vs. One-Time Reads
-To balance operational responsiveness with Firestore quota and cost controls:
+### 2.4 Transactional WhatsApp Outbox Pattern
+- The browser never communicates with OpenWA directly.
+- The backend writes receipt payloads to `whatsapp_outbox` inside the invoice transaction.
+- An independent background worker polls pending records using `FOR UPDATE SKIP LOCKED` and transmits them to OpenWA with exponential backoff (up to 5 attempts).
+- **Failure Isolation:** An unreachable OpenWA gateway or failed delivery will **never** fail or roll back the invoice creation transaction.
 
-| Data Type / Collection | Read Pattern | Rationale |
-| :--- | :--- | :--- |
-| **Auth State (`onAuthStateChanged`)** | Real-time Listener | Essential for immediate session invalidation and role change synchronization. |
-| **Active Buckets (`BucketHeader`, `Details`)** | Real-time Listener (`onSnapshot`) | Enables multi-terminal visibility or instant recovery if cashier refreshes terminal. |
-| **Product Catalog (`Products`)** | One-Time Read (`getDocs`) with Redux Caching | High frequency reads; catalog changes infrequently during billing shifts. |
-| **Invoices List (`InvoiceHeader`)** | Paginated One-Time Queries (`startAfter`, `limit`) | Prevents runaway document read costs over large transaction sets. |
-| **Inventory / Stock Batches** | Targeted One-Time Queries | Query by `BarcodeNumber` or `ProductId` on demand. |
-
----
-
-## 4. State Management Architecture (Redux Toolkit)
-The client state is structured into distinct functional slices:
-- **`authSlice`:** Stores authenticated user profile, Firebase ID token, active store selection, and mapped system role (`Admin`, `Cashier`, `Inventory Manager`).
-- **`posTerminalSlice`:** Holds current active bucket, staged cart line items, customer mobile and name, selected payment mode, tax breakdown summary, and keyboard shortcut focus state.
-- **`heldBucketsSlice`:** Tracks held customer queues for multi-tasking cashiers.
-- **`masterDataSlice`:** In-memory cached categories, active tax rates, and store metadata to ensure zero-latency POS lookups.
-- **`uiSlice`:** Global drawer states, toast notifications, active network status, and dialog modals.
-
----
-
-## 5. Atomicity, Transactions, and Concurrency
-Because there is no traditional backend middleware, strict ACID guarantees in Firestore are implemented using **Firestore Transactions (`runTransaction`)**:
-
-1. **Bucket-to-Invoice Conversion:**
-   - Step 1: Read active `BucketHeader` and `BucketDetails`.
-   - Step 2: Read current sequential invoice counter from `Counters/Store_{StoreId}_FY_{Year}`.
-   - Step 3: Increment counter and format `DocumentNumber` (e.g., `INV-2627-001042`).
-   - Step 4: Write `InvoiceHeader` and batch-insert `InvoiceDetails`.
-   - Step 5: Mark `BucketHeader.RecordStatus = 1` (soft delete / closed).
-   - Step 6: Atomic commit. If another cashier claimed the same sequential number concurrently, the transaction retries automatically up to 5 times.
-
-2. **Stock Decrement (When Ledger is Approved):**
-   - Stock counts are decremented inside the same atomic transaction or staged into a transactional append-only ledger (`StockLedger`).
+### 2.5 Role-Based Access Control (RBAC) & Stakeholders
+- Only three authenticated login roles exist:
+  1. **`ADMIN`:** Full access across all modules and settings.
+  2. **`CASHIER`:** Restricted to POS Billing, Invoicing (view/create own), Customers (view/create), and Product catalog viewing.
+  3. **`INVENTORY_MANAGER`:** Access to Products, Categories, Vendors, Purchase Orders, Material Inward, Material Returns, Stock ledger, and Stock reports.
+- **External Entity:** `VENDOR` is an external supplier with **no system login or user account**.
+- Route guards enforce permissions via `@RequirePermission(module, action)` on every endpoint.
 
 ---
 
-## 6. Cloud Functions Recommendation
-**Recommendation for Production Hardening:**
-Direct client-to-Firestore architecture is viable for an internal local POS network, but writing sensitive fields (such as invoice numbers, tax sums, and payment confirmation flags) from the browser carries a residual risk of client-side script manipulation.
-- **Phase 2 Migration Path:** Introduce Firebase Cloud Functions (Node.js 20 LTS) exposing callable HTTPS endpoints for:
-  - `createInvoiceFromBucket` (secures invoice numbering and tax math on trusted backend).
-  - `cancelInvoice` (enforces strict managerial cancellation and reversal).
-  - `setUserRole` (prevents self-escalation of roles).
+## 3. Frontend Integration & Compatibility Architecture
+To eliminate risks of UI regressions, the React frontend (`POSUI`) preserves its existing structure:
+1. **Function Signature Preservation:** Every function in `POSUI/src/_api/*` retains its exact name, arguments, and return interface.
+2. **HTTP Client (`src/_api/httpClient.js`):** Replaces Firestore SDK with an Axios instance pointing to `REACT_APP_API_URL` (`/api/v1`).
+   - Access token stored in memory only.
+   - HTTP response interceptor automatically handles 401 token expiration by invoking `POST /auth/refresh` once, queuing concurrent calls, and retrying.
+   - Attaches `Idempotency-Key` UUID on invoice creation requests.
+3. **Bidirectional Mappers (`src/_api/mappers/*`):** Transparently convert backend `camelCase` DTOs to the legacy `PascalCase` format expected by MUI tables and Formik forms (`Id`, `Name`, `ProductNumber`, `RecordStatus`, etc.).
 
 ---
 
-## 7. Offline & Resilience Strategy
-- **IndexedDB Persistence:** Firestore offline persistence is enabled via `enableIndexedDbPersistence()`. If the internet drops during a peak store rush, cashiers can still query cached products and stage buckets.
-- **Network Status Detection:** The `navigator.onLine` event triggers an ambient UI warning banner.
-- **Offline Writes:** Writes queued while offline are synchronized automatically upon reconnection. (Note: Concurrency-dependent actions such as invoice sequence finalization are blocked until live connection is restored to prevent duplicate sequence conflicts).
-
----
-
-## 8. Technical Debt & Build Toolchain Notice
-- **Legacy OpenSSL Flag:** The React build toolchain uses `react-scripts` / Webpack 5 requiring `NODE_OPTIONS=--openssl-legacy-provider` on modern Node.js versions (v18, v20, v22).
-- **Remediation Recommendation:** Plan migration of `POSUI` to modern **Vite + React 18 / 19** in Milestone 14 to eliminate the legacy OpenSSL provider requirement, improve HMR speeds, and cut production bundle size by over 40%.
+## 4. State Management (Redux Toolkit)
+- **`authSlice`:** Manages user identity, session state, permissions matrix, and assigned store IDs.
+- **`cartSlice`:** Manages active terminal cart, line items, customer association, and payment tenders.
+- **`heldBucketsSlice`:** Manages multi-queue held baskets (`BKT-01`, `BKT-02`) synced with backend buckets API.
+- **`masterDataSlice`:** Caches active categories, stores, and tax rates for rapid rendering.

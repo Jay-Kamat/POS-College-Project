@@ -6,6 +6,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import store from './store';
 import { theme } from './themes';
 import App from './App';
+import './print.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

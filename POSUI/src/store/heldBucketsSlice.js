@@ -1,16 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit';
 
 const initialState = {
-  heldBuckets: [
-    {
-      id: 'bkt_held_01',
-      bucketNumber: 'BKT-01',
-      customerName: 'Jay Sharma',
-      itemsCount: 2,
-      total: 155,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-  ]
+  heldBuckets: []
 };
 
 export const heldBucketsSlice = createSlice({
@@ -18,13 +9,18 @@ export const heldBucketsSlice = createSlice({
   initialState,
   reducers: {
     addHeldBucket: (state, action) => {
+      // Prevent duplicates by ID
+      state.heldBuckets = state.heldBuckets.filter(b => b.id !== action.payload.id);
       state.heldBuckets.push(action.payload);
     },
     removeHeldBucket: (state, action) => {
       state.heldBuckets = state.heldBuckets.filter(b => b.id !== action.payload);
+    },
+    clearAllHeldBuckets: (state) => {
+      state.heldBuckets = [];
     }
   }
 });
 
-export const { addHeldBucket, removeHeldBucket } = heldBucketsSlice.actions;
+export const { addHeldBucket, removeHeldBucket, clearAllHeldBuckets } = heldBucketsSlice.actions;
 export default heldBucketsSlice.reducer;

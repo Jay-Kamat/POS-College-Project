@@ -693,7 +693,7 @@ export const db = {
 
       const invoiceItems = [];
       for (const item of cart.items) {
-        const rate = parseFloat(item.cost);
+        const rate = parseFloat(item.rate !== undefined ? item.rate : (item.cost !== undefined ? item.cost : (item.Cost || 0)));
         const qty = parseInt(item.quantity, 10);
         const taxPct = parseFloat(item.taxPercent || 0);
         const lineSubtotal = rate * qty;
@@ -708,12 +708,29 @@ export const db = {
 
         const lineTotal = lineSubtotal + cgst + sgst + igst;
 
+        // Verify available stock in database before deduction
+        const pId = String(item.id || '');
+        const pNum = String(item.productNumber || item.id || '');
+        const stockCheck = await client.query(
+          'SELECT id, name, stock_quantity FROM products WHERE (id = $1 OR product_number = $1 OR id = $2 OR product_number = $2) AND record_status = 0 LIMIT 1',
+          [pId, pNum]
+        );
+        if (stockCheck.rowCount > 0) {
+          const availStock = parseInt(stockCheck.rows[0].stock_quantity || 0, 10);
+          if (availStock <= 0) {
+            throw new Error(`Item "${stockCheck.rows[0].name}" is out of stock in inventory.`);
+          }
+          if (qty > availStock) {
+            throw new Error(`Cannot checkout ${qty} unit(s) of "${stockCheck.rows[0].name}". Only ${availStock} available in inventory.`);
+          }
+        }
+
         // Decrement stock in products table
         await client.query(`
           UPDATE products
           SET stock_quantity = GREATEST(0, stock_quantity - $1), updated_at = NOW()
-          WHERE id = $2 OR product_number = $3
-        `, [qty, item.id, item.productNumber]);
+          WHERE id = $2 OR product_number = $2 OR id = $3 OR product_number = $3
+        `, [qty, pId, pNum]);
 
         invoiceItems.push({
           ProductId: item.id,
@@ -796,13 +813,48 @@ export const db = {
   },
 
   cancelInvoice: async (id, reason) => {
-    const res = await query(`
-      UPDATE invoices
-      SET record_status = 1, cancellation_reason = $1, updated_at = NOW()
-      WHERE id = $2
-      RETURNING *
-    `, [reason || 'Customer cancellation', id]);
-    return mapInvoice(res.rows[0]);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const invRes = await client.query('SELECT * FROM invoices WHERE id = $1', [id]);
+      if (invRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const inv = invRes.rows[0];
+      if (inv.record_status === 1) {
+        await client.query('ROLLBACK');
+        return mapInvoice(inv);
+      }
+
+      // Restore stock for all line items
+      const rawItems = Array.isArray(inv.items) ? inv.items : (typeof inv.items === 'string' ? JSON.parse(inv.items || '[]') : []);
+      for (const item of rawItems) {
+        const qty = parseInt(item.Quantity || item.quantity || 1, 10);
+        const pId = String(item.ProductId || item.productId || item.id || '');
+        const pNum = String(item.ProductNumber || item.productNumber || pId || '');
+        await client.query(`
+          UPDATE products
+          SET stock_quantity = stock_quantity + $1, updated_at = NOW()
+          WHERE id = $2 OR product_number = $2 OR id = $3 OR product_number = $3
+        `, [qty, pId, pNum]);
+      }
+
+      const res = await client.query(`
+        UPDATE invoices
+        SET record_status = 1, cancellation_reason = $1, updated_at = NOW()
+        WHERE id = $2
+        RETURNING *
+      `, [reason || 'Customer cancellation', id]);
+
+      await client.query('COMMIT');
+      return mapInvoice(res.rows[0]);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   },
 
   // -------------------------------------------------------------
