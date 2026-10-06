@@ -7,11 +7,11 @@ Write-Host "==========================================================" -Foregro
 Write-Host "  Starting POS & Billing System (Backend + OpenWA + POSUI)" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# 1. Start Backend REST API in background job
-Write-Host "`n[1/3] Launching Node.js Backend REST API (Port 5000)..." -ForegroundColor Magenta
+# 1. Start .NET Core Backend REST API in background job
+Write-Host "`n[1/3] Launching .NET Core Backend REST API (Port 5000)..." -ForegroundColor Magenta
 $backendJob = Start-Job -ScriptBlock {
     Set-Location "d:\Pos Clg Project\Backend"
-    node server.js
+    dotnet run
 }
 
 Start-Sleep -Seconds 1
