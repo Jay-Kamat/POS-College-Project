@@ -22,7 +22,12 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Tooltip
+  Tooltip,
+  Autocomplete,
+  MenuItem,
+  Select,
+  FormControl,
+  InputLabel
 } from '@mui/material';
 import {
   QrCodeScanner as ScannerIcon,
@@ -33,6 +38,8 @@ import {
   PauseCircleOutline as HoldIcon,
   CheckCircle as PayIcon,
   Person as PersonIcon,
+  PersonAdd as PersonAddIcon,
+  Phone as PhoneIcon,
   QrCode2 as QrIcon,
   Payments as CashIcon,
   ClearAll as ClearIcon,
@@ -78,7 +85,38 @@ export default function PosTerminal() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [heldBucketsDialogOpen, setHeldBucketsDialogOpen] = useState(false);
 
+  // Customer Search & Creation State
+  const [customerOptions, setCustomerOptions] = useState([]);
+  const [customerSearchInput, setCustomerSearchInput] = useState('');
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [addCustomerDialogOpen, setAddCustomerDialogOpen] = useState(false);
+  const [newCustomerForm, setNewCustomerForm] = useState({
+    name: '',
+    mobileNumber: '',
+    state: 'Maharashtra',
+    gstin: ''
+  });
+
   const barcodeInputRef = useRef(null);
+
+  // Fetch customer suggestions
+  const fetchCustomers = async (search = '') => {
+    try {
+      setCustomerLoading(true);
+      const list = await customerService.getCustomers(search);
+      if (Array.isArray(list)) {
+        setCustomerOptions(list);
+      }
+    } catch (err) {
+      console.warn('Failed to load customers for suggestions:', err);
+    } finally {
+      setCustomerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCustomers('');
+  }, []);
 
   // Load initial catalog and categories
   useEffect(() => {
@@ -201,16 +239,92 @@ export default function PosTerminal() {
     handleAddProductWithStockCheck(product);
   };
 
-  // Customer Mobile Lookup
-  const handleCustomerMobileChange = async (e) => {
-    const mobile = e.target.value;
-    dispatch(setCustomer({ mobileNumber: mobile }));
-    if (mobile.length === 10) {
-      const found = await customerService.getCustomerByMobile(mobile);
-      if (found) {
-        dispatch(setCustomer({ name: found.Name, state: found.State, gstin: found.GstNumber }));
-        setToast({ open: true, message: `Customer Found: ${found.Name}`, severity: 'info' });
-      }
+  // Customer Search & Suggestion handlers
+  const handleCustomerSearchInputChange = (newVal) => {
+    setCustomerSearchInput(newVal);
+    if (newVal && newVal.length >= 2) {
+      fetchCustomers(newVal);
+    } else if (!newVal) {
+      fetchCustomers('');
+    }
+  };
+
+  const handleSelectCustomer = (selectedCust) => {
+    if (!selectedCust) {
+      dispatch(setCustomer({ name: 'Walk-in Customer', mobileNumber: '', state: 'Maharashtra', gstin: '' }));
+      return;
+    }
+
+    if (selectedCust.isAddNew) {
+      openAddNewCustomerModal(selectedCust.typedValue);
+      return;
+    }
+
+    dispatch(setCustomer({
+      id: selectedCust.Id,
+      name: selectedCust.Name,
+      mobileNumber: selectedCust.MobileNumber,
+      state: selectedCust.State || 'Maharashtra',
+      gstin: selectedCust.GstNumber || ''
+    }));
+    setToast({
+      open: true,
+      message: `Customer selected: ${selectedCust.Name} (${selectedCust.MobileNumber})`,
+      severity: 'success'
+    });
+  };
+
+  const openAddNewCustomerModal = (presetQuery = '') => {
+    const isDigits = /^\d+$/.test(presetQuery.trim());
+    setNewCustomerForm({
+      name: isDigits ? '' : presetQuery.trim(),
+      mobileNumber: isDigits ? presetQuery.trim().slice(0, 10) : '',
+      state: activeStore?.state || 'Maharashtra',
+      gstin: ''
+    });
+    setAddCustomerDialogOpen(true);
+  };
+
+  const handleSaveNewCustomer = async () => {
+    const { name, mobileNumber, state, gstin } = newCustomerForm;
+    const cleanMobile = (mobileNumber || '').replace(/[^0-9]/g, '');
+
+    if (!name || !name.trim()) {
+      setToast({ open: true, message: 'Customer Name is required', severity: 'warning' });
+      return;
+    }
+
+    if (cleanMobile.length !== 10) {
+      setToast({ open: true, message: 'Please enter a valid 10-digit mobile number', severity: 'warning' });
+      return;
+    }
+
+    try {
+      const created = await customerService.createCustomer({
+        Name: name.trim(),
+        MobileNumber: cleanMobile,
+        State: state || 'Maharashtra',
+        GstNumber: gstin ? gstin.trim().toUpperCase() : ''
+      });
+
+      dispatch(setCustomer({
+        id: created.Id,
+        name: created.Name,
+        mobileNumber: created.MobileNumber,
+        state: created.State || 'Maharashtra',
+        gstin: created.GstNumber || ''
+      }));
+
+      setCustomerOptions(prev => [created, ...prev.filter(c => c.Id !== created.Id)]);
+      setAddCustomerDialogOpen(false);
+      setCustomerSearchInput('');
+      setToast({
+        open: true,
+        message: `Customer "${created.Name}" created & selected for billing!`,
+        severity: 'success'
+      });
+    } catch (err) {
+      setToast({ open: true, message: `Failed to create customer: ${err.message}`, severity: 'error' });
     }
   };
 
@@ -568,34 +682,176 @@ export default function PosTerminal() {
               </Box>
             </Box>
 
-            {/* Customer Lookup Bar */}
-            <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1, bgcolor: '#F8FAFC', borderRadius: 1.5, border: '1px solid #E3E8EF', alignItems: 'center' }}>
-              <TextField
-                size="small"
-                fullWidth
-                placeholder="Customer Mobile (10 digits)"
-                value={cart.customer?.mobileNumber || ''}
-                onChange={handleCustomerMobileChange}
-                InputProps={{
-                  startAdornment: <InputAdornment position="start"><PersonIcon sx={{ fontSize: 18 }} /></InputAdornment>
-                }}
-              />
-              <TextField
-                size="small"
-                fullWidth
-                placeholder="Customer Name"
-                value={cart.customer?.name || ''}
-                onChange={(e) => dispatch(setCustomer({ name: e.target.value }))}
-              />
-              {(cart.customer?.mobileNumber || (cart.customer?.name && cart.customer?.name !== 'Walk-in Customer')) && (
-                <IconButton
-                  size="small"
-                  title="Reset Customer to Walk-in"
-                  onClick={() => dispatch(setCustomer({ name: 'Walk-in Customer', mobileNumber: '', gstin: '' }))}
-                  sx={{ color: '#6B7280', p: 0.5 }}
-                >
-                  <ClearIcon sx={{ fontSize: 18 }} />
-                </IconButton>
+            {/* Customer Search & Suggestion Bar */}
+            <Box sx={{ mb: 1.5, p: 1, bgcolor: '#F8FAFC', borderRadius: 2, border: '1px solid #E3E8EF' }}>
+              {(cart.customer?.mobileNumber || (cart.customer?.name && cart.customer?.name !== 'Walk-in Customer')) ? (
+                // Selected Customer Profile Box
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box sx={{
+                      bgcolor: '#EEF2FF',
+                      color: '#3B5BDB',
+                      borderRadius: '50%',
+                      width: 32,
+                      height: 32,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: '1px solid #C7D2FE'
+                    }}>
+                      <PersonIcon sx={{ fontSize: 18 }} />
+                    </Box>
+                    <Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: '#1F2937' }}>
+                          {cart.customer.name}
+                        </Typography>
+                        {cart.customer.state && (
+                          <Chip
+                            label={cart.customer.state}
+                            size="small"
+                            sx={{ height: 18, fontSize: 10, bgcolor: '#F1F5F9', color: '#475569', fontWeight: 600 }}
+                          />
+                        )}
+                      </Box>
+                      <Typography variant="caption" sx={{ color: '#6B7280', display: 'flex', gap: 0.8, alignItems: 'center' }}>
+                        <span>📱 {cart.customer.mobileNumber || 'No phone'}</span>
+                        {cart.customer.gstin && (
+                          <span>• GST: <strong>{cart.customer.gstin}</strong></span>
+                        )}
+                      </Typography>
+                    </Box>
+                  </Box>
+                  <Tooltip title="Reset to Walk-in Customer">
+                    <Button
+                      size="small"
+                      color="secondary"
+                      onClick={() => {
+                        dispatch(setCustomer({ name: 'Walk-in Customer', mobileNumber: '', gstin: '', state: 'Maharashtra' }));
+                        setCustomerSearchInput('');
+                      }}
+                      startIcon={<ClearIcon sx={{ fontSize: 14 }} />}
+                      sx={{ fontSize: 11, py: 0.2, px: 0.8, textTransform: 'none' }}
+                    >
+                      Clear
+                    </Button>
+                  </Tooltip>
+                </Box>
+              ) : (
+                // Search with Autocomplete suggestions + "+ Customer" button
+                <Box sx={{ display: 'flex', gap: 0.8, alignItems: 'center' }}>
+                  <Autocomplete
+                    freeSolo
+                    fullWidth
+                    size="small"
+                    options={customerOptions}
+                    getOptionLabel={(option) => {
+                      if (typeof option === 'string') return option;
+                      return `${option.Name || ''} (${option.MobileNumber || ''})`;
+                    }}
+                    filterOptions={(options, params) => {
+                      const q = params.inputValue.toLowerCase().trim();
+                      const filtered = options.filter(opt => {
+                        return (opt.Name && opt.Name.toLowerCase().includes(q)) ||
+                               (opt.MobileNumber && opt.MobileNumber.includes(q)) ||
+                               (opt.GstNumber && opt.GstNumber.toLowerCase().includes(q));
+                      });
+                      if (q !== '') {
+                        filtered.push({
+                          isAddNew: true,
+                          typedValue: params.inputValue.trim(),
+                          Name: `+ Add "${params.inputValue.trim()}" as new customer`,
+                          MobileNumber: ''
+                        });
+                      }
+                      return filtered;
+                    }}
+                    renderOption={(props, option) => {
+                      if (option.isAddNew) {
+                        return (
+                          <li {...props} key="add-new-cust" style={{ backgroundColor: '#EEF2FF', color: '#3B5BDB', fontWeight: 700 }}>
+                            <PersonAddIcon sx={{ fontSize: 18, mr: 1, color: '#3B5BDB' }} />
+                            <span>{option.Name}</span>
+                          </li>
+                        );
+                      }
+                      return (
+                        <li {...props} key={option.Id || option.MobileNumber}>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', py: 0.3 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600, color: '#1F2937' }}>
+                                {option.Name}
+                              </Typography>
+                              <Chip
+                                label={option.MobileNumber}
+                                size="small"
+                                sx={{ height: 18, fontSize: 11, bgcolor: '#EBFBEE', color: '#2F9E44', fontWeight: 600 }}
+                              />
+                            </Box>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.2 }}>
+                              <Typography variant="caption" sx={{ color: '#6B7280' }}>
+                                {option.State || 'Maharashtra'} {option.TotalVisits ? `• ${option.TotalVisits} visit(s)` : ''}
+                              </Typography>
+                              {option.GstNumber && (
+                                <Typography variant="caption" sx={{ color: '#4F46E5', fontWeight: 600, fontSize: 10 }}>
+                                  GST: {option.GstNumber}
+                                </Typography>
+                              )}
+                            </Box>
+                          </Box>
+                        </li>
+                      );
+                    }}
+                    onChange={(event, newValue) => {
+                      if (typeof newValue === 'string') {
+                        if (/^\d{10}$/.test(newValue.trim())) {
+                          dispatch(setCustomer({ mobileNumber: newValue.trim() }));
+                        } else {
+                          dispatch(setCustomer({ name: newValue.trim() }));
+                        }
+                      } else if (newValue) {
+                        handleSelectCustomer(newValue);
+                      }
+                    }}
+                    inputValue={customerSearchInput}
+                    onInputChange={(event, newInputValue) => {
+                      handleCustomerSearchInputChange(newInputValue);
+                    }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        placeholder="Search customer by Name or Mobile..."
+                        InputProps={{
+                          ...params.InputProps,
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <SearchIcon sx={{ fontSize: 18, color: '#9CA3AF' }} />
+                            </InputAdornment>
+                          )
+                        }}
+                      />
+                    )}
+                  />
+                  <Tooltip title="Register new customer">
+                    <Button
+                      size="small"
+                      variant="contained"
+                      onClick={() => openAddNewCustomerModal(customerSearchInput)}
+                      startIcon={<PersonAddIcon sx={{ fontSize: 16 }} />}
+                      sx={{
+                        whiteSpace: 'nowrap',
+                        height: 40,
+                        px: 1.5,
+                        fontWeight: 700,
+                        bgcolor: '#3B5BDB',
+                        textTransform: 'none',
+                        '&:hover': { bgcolor: '#2B44B8' }
+                      }}
+                    >
+                      + Customer
+                    </Button>
+                  </Tooltip>
+                </Box>
               )}
             </Box>
 
@@ -933,6 +1189,101 @@ export default function PosTerminal() {
           ) : <Box />}
           <Button onClick={() => setHeldBucketsDialogOpen(false)} variant="outlined">
             Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add New Customer Dialog */}
+      <Dialog
+        open={addCustomerDialogOpen}
+        onClose={() => setAddCustomerDialogOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 700, pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <PersonAddIcon sx={{ color: '#3B5BDB' }} />
+          <span>Register New Customer</span>
+        </DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <Typography variant="caption" sx={{ color: '#6B7280', mt: -0.5 }}>
+            Add customer details to associate with this bill and track loyalty rewards.
+          </Typography>
+
+          <TextField
+            autoFocus
+            required
+            size="small"
+            label="Customer Full Name"
+            placeholder="e.g. Ramesh Kumar"
+            value={newCustomerForm.name}
+            onChange={(e) => setNewCustomerForm({ ...newCustomerForm, name: e.target.value })}
+            fullWidth
+          />
+
+          <TextField
+            required
+            size="small"
+            label="Mobile Number (10 digits)"
+            placeholder="e.g. 9876543210"
+            value={newCustomerForm.mobileNumber}
+            onChange={(e) => {
+              const val = e.target.value.replace(/[^0-9]/g, '').slice(0, 10);
+              setNewCustomerForm({ ...newCustomerForm, mobileNumber: val });
+            }}
+            fullWidth
+            InputProps={{
+              startAdornment: <InputAdornment position="start">+91</InputAdornment>
+            }}
+          />
+
+          <FormControl size="small" fullWidth>
+            <InputLabel>State (Place of Supply)</InputLabel>
+            <Select
+              label="State (Place of Supply)"
+              value={newCustomerForm.state}
+              onChange={(e) => setNewCustomerForm({ ...newCustomerForm, state: e.target.value })}
+            >
+              {[
+                'Maharashtra',
+                'Andhra Pradesh',
+                'Delhi',
+                'Goa',
+                'Gujarat',
+                'Karnataka',
+                'Kerala',
+                'Madhya Pradesh',
+                'Punjab',
+                'Rajasthan',
+                'Tamil Nadu',
+                'Telangana',
+                'Uttar Pradesh',
+                'West Bengal',
+                'Other'
+              ].map((st) => (
+                <MenuItem key={st} value={st}>{st}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <TextField
+            size="small"
+            label="GSTIN (Optional, for B2B billing)"
+            placeholder="e.g. 27AABCZ1234P1ZR"
+            value={newCustomerForm.gstin}
+            onChange={(e) => setNewCustomerForm({ ...newCustomerForm, gstin: e.target.value.toUpperCase() })}
+            fullWidth
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setAddCustomerDialogOpen(false)} variant="outlined">
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveNewCustomer}
+            sx={{ bgcolor: '#3B5BDB', fontWeight: 700, '&:hover': { bgcolor: '#2B44B8' } }}
+          >
+            Save & Select
           </Button>
         </DialogActions>
       </Dialog>

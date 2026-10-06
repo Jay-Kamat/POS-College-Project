@@ -313,8 +313,22 @@ export const db = {
   },
 
   createCustomer: async (data) => {
+    const cleanMobile = (data.MobileNumber || '').replace(/[^0-9]/g, '');
+    const existing = await query('SELECT * FROM customers WHERE mobile_number = $1 AND record_status = 0 LIMIT 1', [cleanMobile]);
+    if (existing.rowCount > 0) {
+      const updated = await query(`
+        UPDATE customers
+        SET name = COALESCE($1, name),
+            gst_number = COALESCE($2, gst_number),
+            state = COALESCE($3, state),
+            updated_at = NOW()
+        WHERE id = $4
+        RETURNING *
+      `, [data.Name, data.GstNumber || '', data.State || 'Maharashtra', existing.rows[0].id]);
+      return mapCustomer(updated.rows[0]);
+    }
+
     const id = `cust_${Date.now()}`;
-    const cleanMobile = data.MobileNumber.replace(/[^0-9]/g, '');
     const res = await query(`
       INSERT INTO customers (id, name, mobile_number, gst_number, state, country)
       VALUES ($1, $2, $3, $4, $5, $6)
