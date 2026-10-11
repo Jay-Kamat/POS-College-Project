@@ -20,4 +20,14 @@ public class TaxRatesController : ControllerBase
         var list = (await _db.GetTaxRatesAsync()).ToList();
         return Ok(list);
     }
+
+    [HttpPost]
+    public async Task<IActionResult> CreateTaxRate([FromBody] PosBackend.Models.TaxRate rate)
+    {
+        if (string.IsNullOrWhiteSpace(rate.Name))
+            return BadRequest(new { status = "error", message = "Name is required" });
+
+        var created = await _db.CreateTaxRateAsync(rate);
+        return StatusCode(201, created);
+    }
 }

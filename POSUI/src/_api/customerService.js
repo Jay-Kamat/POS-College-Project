@@ -130,6 +130,40 @@ export const customerService = {
     }
   },
 
+  getCustomerStats: async () => {
+    try {
+      const stats = await apiClient.get('/api/customers/stats');
+      if (stats) return stats;
+    } catch (e) {
+      console.warn('Fallback to local customer stats:', e.message);
+    }
+    const list = getStoredCustomers().filter(c => (c.RecordStatus ?? c.recordStatus ?? 0) === 0);
+    const totalCustomers = list.length;
+    const b2bClients = list.filter(c => !!(c.GstNumber || c.gstNumber)).length;
+    const totalVisits = list.reduce((sum, c) => sum + (c.TotalVisits || c.totalVisits || 0), 0);
+    const cumulativeRevenue = list.reduce((sum, c) => sum + (c.TotalSpend || c.totalSpend || 0), 0);
+    return { totalCustomers, b2bClients, totalVisits, cumulativeRevenue };
+  },
+
+  getCustomerById: async (id) => {
+    try {
+      return await apiClient.get(`/api/customers/${id}`);
+    } catch (e) {
+      const list = getStoredCustomers();
+      return list.find(c => (c.Id || c.id) === id) || null;
+    }
+  },
+
+  getCustomerInvoices: async (id) => {
+    try {
+      const invoices = await apiClient.get(`/api/customers/${id}/invoices`);
+      if (Array.isArray(invoices)) return invoices;
+    } catch (e) {
+      console.warn('Fallback to empty customer invoices:', e.message);
+    }
+    return [];
+  },
+
   deleteCustomer: async (id) => {
     try {
       await apiClient.delete(`/api/customers/${id}`);

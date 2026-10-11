@@ -113,18 +113,18 @@ export default function MainLayout() {
               icon={<StoreIcon sx={{ fontSize: 16 }} />}
               label={`${activeStore.name} (Mumbai)`}
               size="small"
-              sx={{ bgcolor: '#F1F5F9', fontWeight: 500, color: '#334155' }}
+              sx={{ bgcolor: '#F1F5F9', fontWeight: 500, color: '#334155', display: { xs: 'none', md: 'inline-flex' } }}
             />
           </Box>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             {/* OpenWA Gateway Indicator */}
             <Tooltip title="OpenWA Gateway: Paired & Active on :2785">
               <Chip
                 icon={<WhatsAppIcon sx={{ color: '#2F9E44 !important', fontSize: 16 }} />}
                 label="WhatsApp Live"
                 size="small"
-                sx={{ bgcolor: '#EBFBEE', color: '#2F9E44', fontWeight: 600, border: '1px solid #D3F9D8' }}
+                sx={{ bgcolor: '#EBFBEE', color: '#2F9E44', fontWeight: 600, border: '1px solid #D3F9D8', display: { xs: 'none', sm: 'inline-flex' } }}
               />
             </Tooltip>
 

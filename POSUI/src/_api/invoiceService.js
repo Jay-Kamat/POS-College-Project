@@ -65,12 +65,16 @@ const saveStoredInvoices = (invoices) => {
 };
 
 export const invoiceService = {
-  getInvoices: async ({ startDate, endDate, search, paymentMode } = {}) => {
+  getInvoices: async ({ startDate, endDate, search, searchTerm, paymentMode, status } = {}) => {
+    const queryTerm = search || searchTerm || '';
+    const queryStatus = status || 'all';
+
     try {
       const params = new URLSearchParams();
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
-      if (search) params.append('search', search);
+      if (queryTerm) params.append('search', queryTerm);
+      if (queryStatus) params.append('status', queryStatus);
       if (paymentMode !== undefined && paymentMode !== '' && paymentMode !== 'all') {
         params.append('paymentMode', paymentMode);
       }
@@ -83,27 +87,60 @@ export const invoiceService = {
       console.warn('Fallback to local invoices:', e.message);
     }
 
-    let list = getStoredInvoices().filter(inv => inv.RecordStatus === 0);
+    let list = getStoredInvoices();
+    if (queryStatus === 'active') {
+      list = list.filter(inv => (inv.RecordStatus === 0 || inv.record_status === 0));
+    } else if (queryStatus === 'cancelled') {
+      list = list.filter(inv => (inv.RecordStatus === 1 || inv.record_status === 1));
+    }
+
     if (startDate) {
       const start = new Date(startDate).getTime();
-      list = list.filter(inv => new Date(inv.Date).getTime() >= start);
+      list = list.filter(inv => new Date(inv.Date || inv.date).getTime() >= start);
     }
     if (endDate) {
       const end = new Date(endDate).getTime() + 86400000;
-      list = list.filter(inv => new Date(inv.Date).getTime() <= end);
+      list = list.filter(inv => new Date(inv.Date || inv.date).getTime() <= end);
     }
     if (paymentMode !== undefined && paymentMode !== '' && paymentMode !== 'all') {
-      list = list.filter(inv => String(inv.ModeOfPayment) === String(paymentMode));
+      list = list.filter(inv => String(inv.ModeOfPayment ?? inv.mode_of_payment) === String(paymentMode));
     }
-    if (search) {
-      const term = search.toLowerCase();
-      list = list.filter(inv =>
-        inv.DocumentNumber.toLowerCase().includes(term) ||
-        (inv.CustomerName && inv.CustomerName.toLowerCase().includes(term)) ||
-        (inv.MobileNumber && inv.MobileNumber.includes(term))
-      );
+    if (queryTerm) {
+      const term = queryTerm.toLowerCase();
+      list = list.filter(inv => {
+        const docNum = (inv.DocumentNumber || inv.document_number || '').toLowerCase();
+        const cName = (inv.CustomerName || inv.customer_name || '').toLowerCase();
+        const mobile = (inv.MobileNumber || inv.mobile_number || '');
+        return docNum.includes(term) || cName.includes(term) || mobile.includes(term);
+      });
     }
     return list;
+  },
+
+  getInvoiceStats: async () => {
+    try {
+      const data = await apiClient.get('/api/invoices/stats');
+      if (data && typeof data === 'object') {
+        return data;
+      }
+    } catch (e) {
+      console.warn('Fallback calculating local invoice stats:', e.message);
+    }
+
+    const list = getStoredInvoices();
+    const active = list.filter(i => (i.RecordStatus === 0 || i.record_status === 0));
+    const cancelled = list.filter(i => (i.RecordStatus === 1 || i.record_status === 1));
+
+    return {
+      TotalInvoices: list.length,
+      ActiveInvoices: active.length,
+      CancelledInvoices: cancelled.length,
+      TotalSales: active.reduce((sum, i) => sum + (Number(i.Amount || i.amount) || 0), 0),
+      CashSales: active.filter(i => (i.ModeOfPayment === 0 || i.mode_of_payment === 0)).reduce((sum, i) => sum + (Number(i.Amount || i.amount) || 0), 0),
+      UpiSales: active.filter(i => (i.ModeOfPayment === 1 || i.mode_of_payment === 1)).reduce((sum, i) => sum + (Number(i.Amount || i.amount) || 0), 0),
+      CardSales: active.filter(i => (i.ModeOfPayment === 2 || i.mode_of_payment === 2)).reduce((sum, i) => sum + (Number(i.Amount || i.amount) || 0), 0),
+      TotalTax: active.reduce((sum, i) => sum + (Number(i.Cgst || i.cgst || 0) + Number(i.Sgst || i.sgst || 0) + Number(i.Igst || i.igst || 0)), 0)
+    };
   },
 
   getInvoiceById: async (id) => {
@@ -111,7 +148,7 @@ export const invoiceService = {
       return await apiClient.get(`/api/invoices/${id}`);
     } catch (e) {
       const list = getStoredInvoices();
-      return list.find(inv => inv.Id === id) || null;
+      return list.find(inv => inv.Id === id || inv.id === id) || null;
     }
   },
 
@@ -153,12 +190,14 @@ export const invoiceService = {
         UpdatedId: 'user_admin_01',
         Items: cart.items.map(item => {
           const r = parseFloat(item.rate !== undefined ? item.rate : (item.cost || 0));
+          const q = parseFloat(item.quantity !== undefined ? item.quantity : 1);
           return {
             ProductId: item.id,
             ProductName: item.name,
-            Quantity: item.quantity,
+            Quantity: q,
+            Unit: String(item.unit || item.Unit || 'PCS').toUpperCase(),
             Rate: r,
-            Total: r * item.quantity
+            Total: parseFloat((r * q).toFixed(2))
           };
         })
       };
@@ -172,7 +211,7 @@ export const invoiceService = {
         cart.items.forEach(ci => {
           const p = stored.find(sp => String(sp.Id) === String(ci.id) || String(sp.ProductNumber) === String(ci.productNumber));
           if (p) {
-            p.StockQuantity = Math.max(0, (p.StockQuantity || 0) - ci.quantity);
+            p.StockQuantity = Math.max(0, parseFloat(((p.StockQuantity || 0) - ci.quantity).toFixed(3)));
           }
         });
         localStorage.setItem('pos_products', JSON.stringify(stored));
@@ -189,7 +228,7 @@ export const invoiceService = {
       console.warn('Fallback cancel local invoice:', e.message);
     }
     const list = getStoredInvoices();
-    const item = list.find(inv => inv.Id === id);
+    const item = list.find(inv => inv.Id === id || inv.id === id);
     if (item) {
       item.RecordStatus = 1;
       item.CancellationReason = reason;

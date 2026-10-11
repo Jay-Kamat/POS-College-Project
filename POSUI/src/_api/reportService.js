@@ -5,31 +5,47 @@ import vendorService from './vendorService';
 
 export const reportService = {
   // 1. Daily Sales Report
-  getDailySalesReport: async ({ startDate, endDate } = {}) => {
+  getDailySalesReport: async ({ startDate, endDate, date } = {}) => {
     try {
-      const data = await apiClient.get('/api/reports/daily-sales');
-      if (data && data.invoices) {
-        // Group invoices by date string (YYYY-MM-DD)
-        const grouped = {};
-        data.invoices.forEach(inv => {
-          const dateKey = inv.Date.split('T')[0];
-          if (!grouped[dateKey]) {
-            grouped[dateKey] = {
-              Date: dateKey,
-              InvoicesCount: 0,
-              CashTotal: 0,
-              UpiTotal: 0,
-              TaxCollected: 0,
-              GrandTotal: 0
-            };
-          }
-          grouped[dateKey].InvoicesCount += 1;
-          if (inv.ModeOfPayment === 0) grouped[dateKey].CashTotal += inv.Amount;
-          else grouped[dateKey].UpiTotal += inv.Amount;
-          grouped[dateKey].TaxCollected += (inv.Cgst || 0) + (inv.Sgst || 0) + (inv.Igst || 0);
-          grouped[dateKey].GrandTotal += inv.Amount;
-        });
-        return Object.values(grouped).sort((a, b) => b.Date.localeCompare(a.Date));
+      const url = date ? `/api/reports/daily-sales?date=${encodeURIComponent(date)}` : '/api/reports/daily-sales';
+      const data = await apiClient.get(url);
+      if (data) {
+        if (Array.isArray(data.dailyBreakdown)) {
+          const arr = [...data.dailyBreakdown];
+          arr.summary = data.summary;
+          arr.invoices = data.invoices || [];
+          return arr;
+        }
+        if (Array.isArray(data)) {
+          return data;
+        }
+        if (data.invoices && Array.isArray(data.invoices)) {
+          const grouped = {};
+          data.invoices.forEach(inv => {
+            const dateKey = (inv.Date || inv.date || '').split('T')[0] || 'Unknown';
+            if (!grouped[dateKey]) {
+              grouped[dateKey] = {
+                Date: dateKey,
+                InvoicesCount: 0,
+                CashTotal: 0,
+                UpiTotal: 0,
+                TaxCollected: 0,
+                GrandTotal: 0
+              };
+            }
+            grouped[dateKey].InvoicesCount += 1;
+            const amt = Number(inv.Amount || inv.amount || 0);
+            const mode = Number(inv.ModeOfPayment ?? inv.mode_of_payment ?? 0);
+            if (mode === 0) grouped[dateKey].CashTotal += amt;
+            else grouped[dateKey].UpiTotal += amt;
+            grouped[dateKey].TaxCollected += Number(inv.Cgst || inv.cgst || 0) + Number(inv.Sgst || inv.sgst || 0) + Number(inv.Igst || inv.igst || 0);
+            grouped[dateKey].GrandTotal += amt;
+          });
+          const list = Object.values(grouped).sort((a, b) => b.Date.localeCompare(a.Date));
+          list.summary = data.summary;
+          list.invoices = data.invoices;
+          return list;
+        }
       }
     } catch (e) {
       console.warn('Fallback daily sales report:', e.message);
@@ -105,7 +121,16 @@ export const reportService = {
   getVendorWiseExpiredStockReport: async () => {
     try {
       const data = await apiClient.get('/api/reports/vendor-wise-expired-stock');
-      if (Array.isArray(data) && data.length > 0) return data;
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map(item => {
+          const val = Number(item.TotalLossValue ?? item.LossValue ?? (item.Quantity * item.CostPrice) ?? 0);
+          return {
+            ...item,
+            TotalLossValue: val,
+            LossValue: val
+          };
+        });
+      }
     } catch (e) {}
 
     const products = await productService.getProducts();

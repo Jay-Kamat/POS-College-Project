@@ -64,6 +64,22 @@ export const userService = {
     return INITIAL_USERS;
   },
 
+  getUserStats: async () => {
+    try {
+      const data = await apiClient.get('/api/users/stats');
+      if (data && typeof data === 'object') return data;
+    } catch (e) {
+      console.warn('Fallback user stats:', e.message);
+    }
+    const users = await userService.getUsers();
+    return {
+      totalUsers: users.length,
+      admins: users.filter(u => u.Role?.toLowerCase() === 'admin').length,
+      cashiers: users.filter(u => u.Role?.toLowerCase() === 'cashier').length,
+      inventoryManagers: users.filter(u => u.Role?.toLowerCase().includes('inventory')).length
+    };
+  },
+
   inviteUser: async (userData) => {
     try {
       const created = await apiClient.post('/api/users', userData);
@@ -82,6 +98,28 @@ export const userService = {
       list.push(newUser);
       localStorage.setItem('pos_users', JSON.stringify(list));
       return newUser;
+    }
+  },
+
+  updateUser: async (userId, userData) => {
+    try {
+      const updated = await apiClient.put(`/api/users/${userId}`, userData);
+      const list = await userService.getUsers();
+      const idx = list.findIndex(u => u.Id === userId);
+      if (idx !== -1) {
+        list[idx] = updated;
+        localStorage.setItem('pos_users', JSON.stringify(list));
+      }
+      return updated;
+    } catch (e) {
+      const list = await userService.getUsers();
+      const idx = list.findIndex(u => u.Id === userId);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...userData };
+        localStorage.setItem('pos_users', JSON.stringify(list));
+        return list[idx];
+      }
+      throw new Error('User not found');
     }
   },
 
@@ -120,13 +158,34 @@ export const userService = {
   getPermissionsMatrix: async () => {
     try {
       const data = await apiClient.get('/api/users/permissions-matrix');
-      if (Array.isArray(data)) return data;
-    } catch (e) {}
+      if (Array.isArray(data) && data.length > 0) {
+        const parsed = data.map(row => ({
+          module: row.module || row.Module,
+          admin: typeof row.admin === 'string' ? JSON.parse(row.admin) : (row.admin || { view: true, create: true, edit: true, delete: true, export: true }),
+          cashier: typeof row.cashier === 'string' ? JSON.parse(row.cashier) : (row.cashier || { view: false, create: false, edit: false, delete: false, export: false }),
+          inventory: typeof row.inventory === 'string' ? JSON.parse(row.inventory) : (row.inventory || { view: false, create: false, edit: false, delete: false, export: false })
+        }));
+        localStorage.setItem('pos_permissions_matrix', JSON.stringify(parsed));
+        return parsed;
+      }
+    } catch (e) {
+      console.warn('Fallback permissions matrix:', e.message);
+    }
     const local = localStorage.getItem('pos_permissions_matrix');
     if (local) {
       try { return JSON.parse(local); } catch (e) {}
     }
     return INITIAL_PERMISSIONS_MATRIX;
+  },
+
+  savePermissionsMatrix: async (matrix) => {
+    try {
+      await apiClient.post('/api/users/permissions-matrix/bulk', matrix);
+    } catch (e) {
+      console.warn('Fallback saving permissions matrix:', e.message);
+    }
+    localStorage.setItem('pos_permissions_matrix', JSON.stringify(matrix));
+    return true;
   },
 
   updatePermission: async (moduleIndex, roleKey, actionKey, value) => {

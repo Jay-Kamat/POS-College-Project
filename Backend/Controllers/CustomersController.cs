@@ -22,6 +22,13 @@ public class CustomersController : ControllerBase
         return Ok(new { status = "success", count = list.Count, data = list });
     }
 
+    [HttpGet("stats")]
+    public async Task<IActionResult> GetCustomerStats()
+    {
+        var stats = await _db.GetCustomerStatsAsync();
+        return Ok(new { status = "success", data = stats });
+    }
+
     [HttpGet("by-mobile/{mobile}")]
     public async Task<IActionResult> GetCustomerByMobile(string mobile)
     {
@@ -30,6 +37,24 @@ public class CustomersController : ControllerBase
             return NotFound(new { status = "error", message = "Customer not found" });
 
         return Ok(new { status = "success", data = found });
+    }
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetCustomerById(string id)
+    {
+        var found = await _db.GetCustomerByIdAsync(id);
+        if (found == null)
+            return NotFound(new { status = "error", message = "Customer not found" });
+
+        return Ok(new { status = "success", data = found });
+    }
+
+    [HttpGet("{id}/invoices")]
+    public async Task<IActionResult> GetCustomerInvoices(string id)
+    {
+        var cust = await _db.GetCustomerByIdAsync(id);
+        var invoices = await _db.GetCustomerInvoicesAsync(id, cust?.MobileNumber);
+        return Ok(new { status = "success", data = invoices });
     }
 
     [HttpPost]

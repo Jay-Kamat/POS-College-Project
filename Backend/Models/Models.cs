@@ -28,9 +28,11 @@ public class Product
     public bool IsExpDate { get; set; }
     public int? Days { get; set; }
     public string? CategoryId { get; set; }
+    public string? CategoryName { get; set; }
     public string? TaxRateId { get; set; }
     public decimal TaxPercent { get; set; } = 5;
-    public int StockQuantity { get; set; }
+    public string Unit { get; set; } = "PCS";
+    public decimal StockQuantity { get; set; } = 50;
     public int RecordStatus { get; set; }
     public DateTime? Created { get; set; }
     public DateTime? Updated { get; set; }
@@ -108,7 +110,8 @@ public class InvoiceItem
     public string ProductId { get; set; } = "";
     public string ProductNumber { get; set; } = "";
     public string ProductName { get; set; } = "";
-    public int Quantity { get; set; }
+    public decimal Quantity { get; set; } = 1;
+    public string Unit { get; set; } = "PCS";
     public decimal Rate { get; set; }
     public decimal TaxPercent { get; set; }
     public decimal Subtotal { get; set; }
@@ -143,6 +146,18 @@ public class Invoice
     public Store? Store { get; set; }
 }
 
+public class InvoiceStatsDto
+{
+    public int TotalInvoices { get; set; }
+    public int ActiveInvoices { get; set; }
+    public int CancelledInvoices { get; set; }
+    public decimal TotalSales { get; set; }
+    public decimal CashSales { get; set; }
+    public decimal UpiSales { get; set; }
+    public decimal CardSales { get; set; }
+    public decimal TotalTax { get; set; }
+}
+
 public class CartLineItem
 {
     public string? Id { get; set; }
@@ -150,7 +165,8 @@ public class CartLineItem
     public string? Name { get; set; }
     public decimal? Rate { get; set; }
     public decimal? Cost { get; set; }
-    public int Quantity { get; set; } = 1;
+    public decimal Quantity { get; set; } = 1;
+    public string? Unit { get; set; } = "PCS";
     public decimal? TaxPercent { get; set; }
 }
 
@@ -195,4 +211,60 @@ public class UserDto
     public string Store { get; set; } = "DailyMart Express (Mumbai)";
     public string Status { get; set; } = "Active";
     public string LastLogin { get; set; } = "Never";
+}
+
+public class PermissionMatrixRowDto
+{
+    public string Module { get; set; } = "";
+    public object? Admin { get; set; }
+    public object? Cashier { get; set; }
+    public object? Inventory { get; set; }
+}
+
+public class PurchaseOrderItem
+{
+    public string ProductId { get; set; } = "";
+    public string ProductName { get; set; } = "";
+    public decimal Quantity { get; set; } = 1;
+    public decimal Rate { get; set; }
+    public string? Unit { get; set; } = "PCS";
+    public string? DeliveryDate { get; set; }
+}
+
+public class PurchaseOrder
+{
+    public string Id { get; set; } = "";
+    public string DocumentNumber { get; set; } = "";
+    public string VendorId { get; set; } = "";
+    public string VendorName { get; set; } = "";
+    public string StoreId { get; set; } = "store_mum_01";
+    public DateTime Date { get; set; }
+    public string Status { get; set; } = "Sent";
+    public decimal TotalAmount { get; set; }
+    public string Items { get; set; } = "[]";
+}
+
+public class MaterialReturnItem
+{
+    public string ProductId { get; set; } = "";
+    public string ProductName { get; set; } = "";
+    public string? BatchBarcode { get; set; }
+    public decimal Quantity { get; set; } = 1;
+    public decimal Rate { get; set; }
+    public decimal Total { get; set; }
+}
+
+public class MaterialReturn
+{
+    public string Id { get; set; } = "";
+    public string DocumentNumber { get; set; } = "";
+    public DateTime Date { get; set; }
+    public string VendorId { get; set; } = "";
+    public string VendorName { get; set; } = "";
+    public string StoreId { get; set; } = "store_mum_01";
+    public string MaterialReturnId { get; set; } = "";
+    public string ReturnReason { get; set; } = "";
+    public decimal TotalReturnAmount { get; set; }
+    public string Status { get; set; } = "Credit Note Pending";
+    public string Items { get; set; } = "[]";
 }

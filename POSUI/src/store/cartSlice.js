@@ -86,12 +86,14 @@ export const cartSlice = createSlice({
       const productId = String(product.Id || product.id || product.ProductNumber || product.productNumber || '');
       if (!productId) return;
 
-      // Determine stock quantity available
+      const unit = String(product.Unit || product.unit || 'PCS').toUpperCase();
+
+      // Determine stock quantity available (supporting decimals for weighed items like KG/LTR)
       let availableStock = 999999;
       if (product.StockQuantity !== undefined && product.StockQuantity !== null) {
-        availableStock = parseInt(product.StockQuantity, 10);
+        availableStock = parseFloat(product.StockQuantity);
       } else if (product.stockQuantity !== undefined && product.stockQuantity !== null) {
-        availableStock = parseInt(product.stockQuantity, 10);
+        availableStock = parseFloat(product.stockQuantity);
       }
 
       // If item is completely out of stock, reject adding to cart
@@ -102,13 +104,13 @@ export const cartSlice = createSlice({
       const productNum = String(product.ProductNumber || product.productNumber || '');
       const existing = state.items.find(i => String(i.id) === productId || (productNum && String(i.productNumber) === productNum));
       if (existing) {
-        const itemMaxStock = existing.stockQuantity !== undefined ? existing.stockQuantity : availableStock;
-        const requestedAdd = product.quantity || 1;
+        const itemMaxStock = existing.stockQuantity !== undefined ? parseFloat(existing.stockQuantity) : availableStock;
+        const requestedAdd = product.quantity !== undefined ? parseFloat(product.quantity) : 1;
         // Do not exceed available stock in cart!
         if (existing.quantity >= itemMaxStock) {
           return;
         }
-        existing.quantity = Math.min(existing.quantity + requestedAdd, itemMaxStock);
+        existing.quantity = Math.min(parseFloat((existing.quantity + requestedAdd).toFixed(3)), itemMaxStock);
       } else {
         const cost = product.Cost !== undefined
           ? parseFloat(product.Cost)
@@ -118,7 +120,7 @@ export const cartSlice = createSlice({
           ? parseFloat(product.TaxPercent)
           : (product.taxPercent !== undefined ? parseFloat(product.taxPercent) : 5);
 
-        const initialQty = Math.min(product.quantity || 1, availableStock);
+        const initialQty = Math.min(product.quantity !== undefined ? parseFloat(product.quantity) : 1, availableStock);
         if (initialQty <= 0) return;
 
         state.items.push({
@@ -126,7 +128,8 @@ export const cartSlice = createSlice({
           productNumber: String(product.ProductNumber || product.productNumber || productId),
           name: product.Name || product.name || 'Product',
           rate: cost,
-          quantity: initialQty,
+          quantity: parseFloat(initialQty.toFixed(3)),
+          unit: unit,
           stockQuantity: availableStock,
           taxPercent: tax,
           expiryDate: product.ExpiryDate || product.expiryDate || null,
@@ -142,11 +145,26 @@ export const cartSlice = createSlice({
       const { id, quantity } = action.payload;
       const item = state.items.find(i => String(i.id) === String(id));
       if (item) {
-        if (quantity <= 0) {
+        const parsed = parseFloat(Number(quantity).toFixed(3));
+        if (parsed <= 0) {
           state.items = state.items.filter(i => String(i.id) !== String(id));
         } else {
-          const maxStock = item.stockQuantity !== undefined ? item.stockQuantity : 999999;
-          item.quantity = Math.min(quantity, maxStock);
+          const maxStock = item.stockQuantity !== undefined ? parseFloat(item.stockQuantity) : 999999;
+          item.quantity = Math.min(parsed, maxStock);
+        }
+      }
+      recalculateTotals(state);
+    },
+    setQuantity: (state, action) => {
+      const { id, quantity } = action.payload;
+      const item = state.items.find(i => String(i.id) === String(id));
+      if (item) {
+        const parsed = parseFloat(Number(quantity).toFixed(3));
+        if (parsed <= 0) {
+          state.items = state.items.filter(i => String(i.id) !== String(id));
+        } else {
+          const maxStock = item.stockQuantity !== undefined ? parseFloat(item.stockQuantity) : 999999;
+          item.quantity = Math.min(parsed, maxStock);
         }
       }
       recalculateTotals(state);
@@ -203,9 +221,10 @@ export const cartSlice = createSlice({
             productNumber: String(item.productNumber || item.ProductNumber || item.id || ''),
             name: item.name || item.Name || 'Product',
             rate: parseFloat(item.rate !== undefined ? item.rate : (item.Cost || 0)),
-            quantity: parseInt(item.quantity || 1, 10),
+            quantity: parseFloat(item.quantity !== undefined ? item.quantity : 1),
+            unit: String(item.unit || item.Unit || 'PCS').toUpperCase(),
             taxPercent: parseFloat(item.taxPercent !== undefined ? item.taxPercent : (item.TaxPercent || 0)),
-            stockQuantity: item.stockQuantity !== undefined ? item.stockQuantity : (item.StockQuantity !== undefined ? item.StockQuantity : 999999),
+            stockQuantity: item.stockQuantity !== undefined ? parseFloat(item.stockQuantity) : (item.StockQuantity !== undefined ? parseFloat(item.StockQuantity) : 999999),
             cgst: 0,
             sgst: 0,
             igst: 0,
@@ -224,6 +243,7 @@ export const cartSlice = createSlice({
 export const {
   addItem,
   updateQuantity,
+  setQuantity,
   removeItem,
   setCustomer,
   resetCustomer,

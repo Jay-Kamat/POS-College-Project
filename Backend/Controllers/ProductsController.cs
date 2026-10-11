@@ -22,6 +22,13 @@ public class ProductsController : ControllerBase
         return Ok(new { status = "success", count = list.Count, data = list });
     }
 
+    [HttpGet("stats")]
+    public async Task<IActionResult> GetProductStats()
+    {
+        var stats = await _db.GetProductStatsAsync();
+        return Ok(new { status = "success", data = stats });
+    }
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetProductById(string id)
     {

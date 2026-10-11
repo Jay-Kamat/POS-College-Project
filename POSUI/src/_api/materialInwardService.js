@@ -24,10 +24,29 @@ const INITIAL_INWARDS = [
   }
 ];
 
+const normalizeInward = (inward) => {
+  if (!inward) return inward;
+  let items = inward.Items;
+  if (typeof items === 'string') {
+    try {
+      items = JSON.parse(items);
+    } catch (e) {
+      items = [];
+    }
+  }
+  return {
+    ...inward,
+    Items: Array.isArray(items) ? items : []
+  };
+};
+
 const getStoredInwards = () => {
   const local = localStorage.getItem('pos_inwards');
   if (local) {
-    try { return JSON.parse(local); } catch (e) {}
+    try {
+      const parsed = JSON.parse(local);
+      if (Array.isArray(parsed)) return parsed.map(normalizeInward);
+    } catch (e) {}
   }
   localStorage.setItem('pos_inwards', JSON.stringify(INITIAL_INWARDS));
   return INITIAL_INWARDS;
@@ -38,36 +57,75 @@ const saveStoredInwards = (inwards) => {
 };
 
 export const materialInwardService = {
+  getInwardStats: async () => {
+    try {
+      const data = await apiClient.get('/api/material-inward/stats');
+      if (data) return data;
+    } catch (e) {
+      console.warn('Fallback getInwardStats:', e.message);
+    }
+    const inwards = getStoredInwards().filter(i => i.RecordStatus === 0);
+    return {
+      TotalInwards: inwards.length,
+      TodayInwards: inwards.filter(i => new Date(i.Date).toDateString() === new Date().toDateString()).length,
+      ActiveVendors: new Set(inwards.map(i => i.VendorId)).size,
+      PoInwards: inwards.filter(i => i.IsPoAvailable).length
+    };
+  },
+
   getInwards: async () => {
     try {
       const data = await apiClient.get('/api/material-inward');
       if (Array.isArray(data)) {
-        saveStoredInwards(data);
-        return data;
+        const normalized = data.map(normalizeInward);
+        saveStoredInwards(normalized);
+        return normalized;
       }
     } catch (e) {
       console.warn('Fallback to local inwards:', e.message);
     }
-    return getStoredInwards().filter(i => i.RecordStatus === 0);
+    return getStoredInwards().filter(i => i.RecordStatus === 0).map(normalizeInward);
+  },
+
+  getInwardById: async (id) => {
+    try {
+      const data = await apiClient.get(`/api/material-inward/${id}`);
+      if (data) return normalizeInward(data);
+    } catch (e) {
+      console.warn('Fallback getInwardById:', e.message);
+    }
+    const list = getStoredInwards();
+    return list.find(i => i.Id === id) || null;
   },
 
   createInward: async (inwardData) => {
-    try {
-      const created = await apiClient.post('/api/material-inward', inwardData);
-      const list = getStoredInwards();
-      list.unshift(created);
-      saveStoredInwards(list);
-      return created;
-    } catch (e) {
-      const list = getStoredInwards();
-      const itemsWithBarcodes = inwardData.Items.map((item, idx) => {
-        const generatedBarcode = item.Barcode || `200100${String(Date.now()).slice(-4)}${String(idx + 1).padStart(2, '0')}`;
-        return {
-          ...item,
-          Barcode: generatedBarcode
-        };
-      });
+    // Ensure all items have barcodes
+    const itemsWithBarcodes = (inwardData.Items || []).map((item, idx) => {
+      const generatedBarcode = item.Barcode || `200100${String(Date.now()).slice(-4)}${String(idx + 1).padStart(2, '0')}`;
+      return {
+        ...item,
+        Barcode: generatedBarcode
+      };
+    });
 
+    const payload = {
+      ...inwardData,
+      Items: itemsWithBarcodes
+    };
+
+    try {
+      const created = await apiClient.post('/api/material-inward', payload);
+      const normalized = normalizeInward({
+        ...payload,
+        ...created,
+        Items: created.Items ? (typeof created.Items === 'string' ? JSON.parse(created.Items) : created.Items) : itemsWithBarcodes
+      });
+      const list = getStoredInwards();
+      list.unshift(normalized);
+      saveStoredInwards(list);
+      return normalized;
+    } catch (e) {
+      console.warn('Fallback local createInward:', e.message);
       const newInward = {
         Id: `inw_${Date.now()}`,
         PurchaseOrderId: inwardData.PurchaseOrderId || null,
@@ -80,7 +138,7 @@ export const materialInwardService = {
         Created: new Date().toISOString(),
         Updated: new Date().toISOString()
       };
-
+      const list = getStoredInwards();
       list.unshift(newInward);
       saveStoredInwards(list);
       return newInward;

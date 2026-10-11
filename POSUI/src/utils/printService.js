@@ -248,21 +248,26 @@ export function printThermalReceipt(invoice, options = {}) {
   <table class="items-table">
     <thead>
       <tr>
-        <th style="width: 48%;">ITEM</th>
-        <th style="width: 14%; text-align: center;">QTY</th>
+        <th style="width: 44%;">ITEM</th>
+        <th style="width: 18%; text-align: center;">QTY/UNIT</th>
         <th style="width: 18%; text-align: right;">RATE</th>
         <th style="width: 20%; text-align: right;">TOTAL</th>
       </tr>
     </thead>
     <tbody>
-      ${(invoice.Items || []).map(item => `
+      ${(invoice.Items || []).map(item => {
+        const u = (item.Unit || item.unit || '').toUpperCase();
+        const q = Number(item.Quantity || 1);
+        const qStr = q % 1 === 0 ? q : q.toFixed(3);
+        return `
         <tr>
           <td>${item.ProductName}</td>
-          <td style="text-align: center;">${item.Quantity}</td>
+          <td style="text-align: center;">${qStr} ${u ? `<span style="font-size: 8.5px;">${u}</span>` : ''}</td>
           <td style="text-align: right;">${Number(item.Rate || 0).toFixed(2)}</td>
           <td style="text-align: right;" class="bold">${Number(item.Total || 0).toFixed(2)}</td>
         </tr>
-      `).join('')}
+        `;
+      }).join('')}
     </tbody>
   </table>
 
@@ -579,26 +584,31 @@ export function printA4Invoice(invoice, options = {}) {
       <thead>
         <tr>
           <th style="width: 5%;">#</th>
-          <th style="width: 38%;">Description of Goods</th>
-          <th style="width: 8%;">Qty</th>
+          <th style="width: 35%;">Description of Goods</th>
+          <th style="width: 12%; text-align: center;">Qty & Unit</th>
           <th style="width: 12%;">Rate (₹)</th>
-          <th style="width: 13%;">Taxable (₹)</th>
+          <th style="width: 12%;">Taxable (₹)</th>
           <th style="width: 10%;">GST (%)</th>
           <th style="width: 14%;">Total (₹)</th>
         </tr>
       </thead>
       <tbody>
-        ${(invoice.Items || []).map((item, idx) => `
+        ${(invoice.Items || []).map((item, idx) => {
+          const u = (item.Unit || item.unit || 'PCS').toUpperCase();
+          const q = Number(item.Quantity || 1);
+          const qStr = q % 1 === 0 ? q : q.toFixed(3);
+          return `
           <tr>
             <td>${idx + 1}</td>
             <td><strong>${item.ProductName}</strong></td>
-            <td>${item.Quantity}</td>
+            <td style="text-align: center;"><strong>${qStr}</strong> <span style="font-size: 11px; color: #555;">${u}</span></td>
             <td>${Number(item.Rate || 0).toFixed(2)}</td>
-            <td>${(Number(item.Rate || 0) * Number(item.Quantity || 1)).toFixed(2)}</td>
+            <td>${(Number(item.Rate || 0) * q).toFixed(2)}</td>
             <td>${item.TaxPercent || 5}%</td>
             <td><strong>${Number(item.Total || 0).toFixed(2)}</strong></td>
           </tr>
-        `).join('')}
+          `;
+        }).join('')}
       </tbody>
     </table>
 
@@ -834,38 +844,57 @@ export function printDebitNote(note, options = {}) {
     </div>
     <div style="text-align: right;">
       <div class="title">DEBIT NOTE</div>
-      <div><strong>Note No:</strong> ${note.ReturnNoteNumber}</div>
+      <div><strong>Note No:</strong> ${note.DocumentNumber || note.ReturnNoteNumber || 'MRN-2026-00000'}</div>
       <div><strong>Date:</strong> ${formattedDate}</div>
     </div>
   </div>
 
   <div class="box">
     <strong>DEBIT TO VENDOR:</strong><br />
-    <span style="font-size: 14px; font-weight: 700;">${note.VendorName}</span><br />
+    <span style="font-size: 14px; font-weight: 700;">${note.VendorName || 'Supplier'}</span><br />
     Reason for Return: <strong>${note.ReturnReason || 'Damaged goods'}</strong><br />
-    Status: <strong>${note.Status || 'Approved'}</strong>
+    Status: <strong>${note.Status || 'Credit Note Pending'}</strong>
   </div>
 
   <table>
     <thead>
       <tr>
-        <th style="width: 10%;">#</th>
-        <th style="width: 50%;">Item Description</th>
+        <th style="width: 8%;">#</th>
+        <th style="width: 47%;">Item Description</th>
         <th style="width: 15%; text-align: center;">Returned Qty</th>
-        <th style="width: 25%; text-align: right;">Debit Amount (₹)</th>
+        <th style="width: 15%; text-align: right;">Rate (₹)</th>
+        <th style="width: 15%; text-align: right;">Debit Amount (₹)</th>
       </tr>
     </thead>
     <tbody>
-      <tr>
-        <td>1</td>
-        <td>Batch Stock Return against ${note.ReturnReason}</td>
-        <td style="text-align: center;">Batch</td>
-        <td style="text-align: right; font-weight: 700;">₹${Number(note.TotalReturnAmount || 0).toFixed(2)}</td>
-      </tr>
+      ${Array.isArray(note.Items) && note.Items.length > 0
+        ? note.Items.map((itm, idx) => `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>
+              <strong>${itm.ProductName || 'Item'}</strong>
+              ${itm.ProductId ? `<br><small style="color:#6B7280;">SKU: ${itm.ProductId}</small>` : ''}
+              ${itm.BatchBarcode ? `<br><small style="color:#6B7280;">Batch: ${itm.BatchBarcode}</small>` : ''}
+            </td>
+            <td style="text-align: center;">${itm.Quantity || itm.ReturnQty || 1}</td>
+            <td style="text-align: right;">₹${Number(itm.Rate || 0).toFixed(2)}</td>
+            <td style="text-align: right; font-weight: 700;">₹${Number(itm.Total || (itm.Quantity * itm.Rate) || 0).toFixed(2)}</td>
+          </tr>
+        `).join('')
+        : `
+          <tr>
+            <td>1</td>
+            <td>Stock Return against ${note.ReturnReason || 'Damage / Expiry'}</td>
+            <td style="text-align: center;">1 Lot</td>
+            <td style="text-align: right;">₹${Number(note.TotalReturnAmount || 0).toFixed(2)}</td>
+            <td style="text-align: right; font-weight: 700;">₹${Number(note.TotalReturnAmount || 0).toFixed(2)}</td>
+          </tr>
+        `
+      }
     </tbody>
   </table>
 
-  <div style="text-align: right; font-size: 16px; font-weight: 800; margin-bottom: 12px;">
+  <div style="text-align: right; font-size: 16px; font-weight: 800; margin-bottom: 12px; color: #E03131;">
     TOTAL DEBIT AMOUNT: ₹${Number(note.TotalReturnAmount || 0).toFixed(2)}
   </div>
 
@@ -881,7 +910,7 @@ export function printDebitNote(note, options = {}) {
 </html>
 `;
 
-  return printHtmlViaIframe(html, `DebitNote_${note.ReturnNoteNumber}`);
+  return printHtmlViaIframe(html, `DebitNote_${note.DocumentNumber || note.ReturnNoteNumber || 'MRN'}`);
 }
 
 export default {

@@ -22,6 +22,7 @@ import {
 } from '@mui/icons-material';
 import whatsappService from '../../../_api/whatsappService';
 import { printThermalReceipt, printA4Invoice } from '../../../utils/printService';
+import { formatQtyWithUnit } from '../../../utils/uomHelper';
 
 export default function InvoiceSuccessDialog({ open, invoice, onClose }) {
   const [isSendingWa, setIsSendingWa] = useState(false);
@@ -101,7 +102,7 @@ export default function InvoiceSuccessDialog({ open, invoice, onClose }) {
           <Box sx={{ mb: 1 }}>
             {invoice.Items.map((item, idx) => (
               <Box key={idx} sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, py: 0.3 }}>
-                <span>{item.ProductName} x {item.Quantity}</span>
+                <span>{item.ProductName} x {formatQtyWithUnit(item.Quantity, item.Unit || item.unit)}</span>
                 <span>₹{item.Total.toFixed(2)}</span>
               </Box>
             ))}

@@ -23,6 +23,23 @@ public class MaterialInwardController : ControllerBase
         return Ok(list);
     }
 
+    [HttpGet("stats")]
+    public async Task<IActionResult> GetMaterialInwardStats()
+    {
+        var stats = await _db.GetMaterialInwardStatsAsync();
+        return Ok(new { status = "success", data = stats });
+    }
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetMaterialInwardById(string id)
+    {
+        var item = await _db.GetMaterialInwardByIdAsync(id);
+        if (item == null)
+            return NotFound(new { status = "error", message = "Material Inward not found" });
+
+        return Ok(item);
+    }
+
     [HttpPost]
     public async Task<IActionResult> CreateMaterialInward([FromBody] JsonElement body)
     {

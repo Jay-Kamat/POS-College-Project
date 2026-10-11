@@ -15,6 +15,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("kpis")]
+    [HttpGet("dashboard")]
     public async Task<IActionResult> GetDashboardKpis()
     {
         var kpis = await _db.GetDashboardKpisAsync();
@@ -25,6 +26,20 @@ public class ReportsController : ControllerBase
     public async Task<IActionResult> GetDailySales([FromQuery] string? date)
     {
         var report = await _db.GetDailySalesReportAsync(date);
+        return Ok(new { status = "success", data = report });
+    }
+
+    [HttpGet("vendor-wise-sale")]
+    public async Task<IActionResult> GetVendorWiseSale()
+    {
+        var report = await _db.GetVendorWiseSalesReportAsync();
+        return Ok(new { status = "success", data = report });
+    }
+
+    [HttpGet("vendor-wise-expired-stock")]
+    public async Task<IActionResult> GetVendorWiseExpiredStock()
+    {
+        var report = await _db.GetVendorWiseExpiredStockReportAsync();
         return Ok(new { status = "success", data = report });
     }
 }

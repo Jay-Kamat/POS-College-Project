@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
@@ -6,24 +8,31 @@ namespace PosBackend.Controllers;
 [Route("api/[controller]")]
 public class BucketsController : ControllerBase
 {
-    private static readonly List<object> _heldBuckets = new();
+    private readonly PosDbService _db;
+
+    public BucketsController(PosDbService db)
+    {
+        _db = db;
+    }
 
     [HttpGet]
-    public IActionResult GetBuckets()
+    public async Task<IActionResult> GetBuckets()
     {
-        return Ok(new { status = "success", data = _heldBuckets });
+        var list = await _db.GetBucketsAsync();
+        return Ok(new { status = "success", data = list });
     }
 
     [HttpPost]
-    public IActionResult SaveBucket([FromBody] object bucket)
+    public async Task<IActionResult> SaveBucket([FromBody] JsonElement bucket)
     {
-        _heldBuckets.Add(bucket);
-        return StatusCode(201, new { status = "success", data = bucket });
+        var saved = await _db.SaveBucketAsync(bucket);
+        return StatusCode(201, new { status = "success", data = saved });
     }
 
     [HttpDelete("{id}")]
-    public IActionResult DeleteBucket(string id)
+    public async Task<IActionResult> DeleteBucket(string id)
     {
+        await _db.DeleteBucketAsync(id);
         return Ok(new { status = "success", message = "Bucket deleted" });
     }
 }

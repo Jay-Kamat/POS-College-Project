@@ -21,10 +21,17 @@ public class InvoicesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetInvoices([FromQuery] string? startDate, [FromQuery] string? endDate, [FromQuery] string? search, [FromQuery] int? paymentMode)
+    public async Task<IActionResult> GetInvoices([FromQuery] string? startDate, [FromQuery] string? endDate, [FromQuery] string? search, [FromQuery] int? paymentMode, [FromQuery] string? status)
     {
-        var list = (await _db.GetInvoicesAsync(startDate, endDate, search, paymentMode)).ToList();
+        var list = (await _db.GetInvoicesAsync(startDate, endDate, search, paymentMode, status)).ToList();
         return Ok(new { status = "success", count = list.Count, data = list });
+    }
+
+    [HttpGet("stats")]
+    public async Task<IActionResult> GetInvoiceStats()
+    {
+        var stats = await _db.GetInvoiceStatsAsync();
+        return Ok(new { status = "success", data = stats });
     }
 
     [HttpGet("{id}")]

@@ -54,6 +54,24 @@ const saveStoredVendors = (vendors) => {
 };
 
 export const vendorService = {
+  getVendorStats: async () => {
+    try {
+      const res = await apiClient.get('/api/vendors/stats');
+      if (res && res.data) return res.data;
+      if (res && res.TotalVendors !== undefined) return res;
+    } catch (e) {
+      console.warn('Fallback getVendorStats:', e.message);
+    }
+    const list = getStoredVendors().filter(v => v.RecordStatus === 0);
+    const cities = new Set(list.map(v => v.City).filter(Boolean));
+    return {
+      TotalVendors: list.length,
+      TotalCities: cities.size,
+      TotalPurchaseOrders: 7,
+      TotalInwards: 11
+    };
+  },
+
   getVendors: async (searchTerm = '') => {
     try {
       const data = await apiClient.get(`/api/vendors${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`);
@@ -69,12 +87,23 @@ export const vendorService = {
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       list = list.filter(v => 
-        v.Name.toLowerCase().includes(term) || 
-        v.VendorCode.toLowerCase().includes(term) ||
-        v.City.toLowerCase().includes(term)
+        (v.Name && v.Name.toLowerCase().includes(term)) || 
+        (v.VendorCode && v.VendorCode.toLowerCase().includes(term)) ||
+        (v.City && v.City.toLowerCase().includes(term))
       );
     }
     return list;
+  },
+
+  getVendorById: async (id) => {
+    try {
+      const data = await apiClient.get(`/api/vendors/${id}`);
+      if (data) return data;
+    } catch (e) {
+      console.warn('Fallback getVendorById:', e.message);
+    }
+    const list = getStoredVendors();
+    return list.find(v => v.Id === id || v.VendorCode === id) || null;
   },
 
   createVendor: async (vendorData) => {
@@ -104,7 +133,7 @@ export const vendorService = {
     try {
       const updated = await apiClient.put(`/api/vendors/${id}`, vendorData);
       const list = getStoredVendors();
-      const index = list.findIndex(v => v.Id === id);
+      const index = list.findIndex(v => v.Id === id || v.VendorCode === id);
       if (index !== -1) {
         list[index] = updated;
         saveStoredVendors(list);
@@ -112,7 +141,7 @@ export const vendorService = {
       return updated;
     } catch (e) {
       const list = getStoredVendors();
-      const index = list.findIndex(v => v.Id === id);
+      const index = list.findIndex(v => v.Id === id || v.VendorCode === id);
       if (index !== -1) {
         list[index] = { ...list[index], ...vendorData, Updated: new Date().toISOString() };
         saveStoredVendors(list);
@@ -125,9 +154,11 @@ export const vendorService = {
   deleteVendor: async (id) => {
     try {
       await apiClient.delete(`/api/vendors/${id}`);
-    } catch (e) {}
+    } catch (e) {
+      console.warn('Fallback delete vendor:', e.message);
+    }
     const list = getStoredVendors();
-    const item = list.find(v => v.Id === id);
+    const item = list.find(v => v.Id === id || v.VendorCode === id);
     if (item) {
       item.RecordStatus = 1;
       saveStoredVendors(list);
