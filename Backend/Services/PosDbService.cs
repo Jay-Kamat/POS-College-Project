@@ -1040,7 +1040,7 @@ public class PosDbService
     // -------------------------------------------------------------
     // Purchase Orders
     // -------------------------------------------------------------
-    public async Task<IEnumerable<dynamic>> GetPurchaseOrdersAsync(string? status = null, string? vendorId = null, string? search = null)
+    public async Task<IEnumerable<dynamic>> GetPurchaseOrdersAsync(string? status = null, string? vendorId = null, string? search = null, string? excludeStatus = null)
     {
         using var conn = CreateConn();
         var sql = @"SELECT id as ""Id"", document_number as ""DocumentNumber"", vendor_id as ""VendorId"", 
@@ -1054,6 +1054,12 @@ public class PosDbService
         {
             sql += " AND LOWER(status) = LOWER(@Status)";
             p.Add("Status", status.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(excludeStatus))
+        {
+            sql += " AND LOWER(status) != LOWER(@ExcludeStatus)";
+            p.Add("ExcludeStatus", excludeStatus.Trim());
         }
 
         if (!string.IsNullOrWhiteSpace(vendorId))

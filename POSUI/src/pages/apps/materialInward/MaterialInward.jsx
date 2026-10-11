@@ -131,6 +131,31 @@ export default function MaterialInward() {
     loadData();
   }, []);
 
+  // Filter out POs that have already been received or cancelled
+  const availablePurchaseOrders = useMemo(() => {
+    return purchaseOrders.filter((po) => {
+      const status = (po.Status || '').trim().toLowerCase();
+      // Do not show POs that are received
+      if (status === 'received') return false;
+      // Do not show POs that are cancelled
+      if (status === 'cancelled') return false;
+      // Also filter out any PO already fulfilled/received in material inward records
+      const alreadyInwarded = inwards.some(
+        (inw) => inw.PurchaseOrderId && (inw.PurchaseOrderId === po.Id || inw.PurchaseOrderId === po.DocumentNumber)
+      );
+      if (alreadyInwarded) return false;
+      return true;
+    });
+  }, [purchaseOrders, inwards]);
+
+  // If selected PO is no longer available, reset selection
+  useEffect(() => {
+    if (activeStep === 0 && selectedPoId && !availablePurchaseOrders.some((p) => p.Id === selectedPoId)) {
+      setSelectedPoId('');
+      setInwardItems([]);
+    }
+  }, [availablePurchaseOrders, selectedPoId, activeStep]);
+
   // When PO is selected in wizard
   const handlePoSelect = (poId) => {
     setSelectedPoId(poId);
@@ -194,7 +219,13 @@ export default function MaterialInward() {
   const handleNext = async () => {
     if (activeStep === 0) {
       if (mode === 'with_po' && !selectedPoId) {
-        setToast({ open: true, message: 'Please select a Purchase Order', severity: 'warning' });
+        setToast({
+          open: true,
+          message: availablePurchaseOrders.length === 0
+            ? 'No pending purchase orders available to receive. Switch to Direct Inward or create a PO.'
+            : 'Please select a Purchase Order',
+          severity: 'warning'
+        });
         return;
       }
       if (mode === 'without_po' && !selectedVendorId) {
@@ -223,6 +254,16 @@ export default function MaterialInward() {
           IsPoAvailable: mode === 'with_po',
           Items: inwardItems
         });
+
+        // Ensure PO is updated to Received
+        if (mode === 'with_po' && selectedPoId) {
+          try {
+            await purchaseOrderService.updatePurchaseOrderStatus(selectedPoId, 'Received');
+          } catch (poErr) {
+            console.warn('PO status sync notice:', poErr);
+          }
+        }
+
         setGeneratedInward(result);
         setActiveStep(2);
         setToast({ open: true, message: 'Inward saved and stock updated in PostgreSQL!', severity: 'success' });
@@ -614,26 +655,68 @@ export default function MaterialInward() {
                 </FormControl>
 
                 {mode === 'with_po' ? (
-                  <FormControl fullWidth margin="normal">
-                    <InputLabel>Select Purchase Order *</InputLabel>
-                    <Select
-                      value={selectedPoId}
-                      label="Select Purchase Order *"
-                      onChange={(e) => handlePoSelect(e.target.value)}
+                  availablePurchaseOrders.length === 0 ? (
+                    <Paper
+                      variant="outlined"
+                      sx={{
+                        p: 3,
+                        my: 2,
+                        borderRadius: 2.5,
+                        bgcolor: '#F8FAFC',
+                        borderColor: '#E2E8F0',
+                        textAlign: 'center'
+                      }}
                     >
-                      {purchaseOrders.map((po) => (
-                        <MenuItem key={po.Id} value={po.Id}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                            <span><strong>{po.DocumentNumber}</strong> &mdash; {po.VendorName}</span>
-                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                              <Chip label={po.Status || 'Sent'} size="small" sx={{ fontSize: 11, height: 20 }} />
-                              <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{Number(po.TotalAmount || 0).toFixed(2)}</Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 1 }}>
+                        <SuccessIcon sx={{ color: '#10B981', fontSize: 24 }} />
+                        <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#0F172A' }}>
+                          No Pending Purchase Orders Available
+                        </Typography>
+                      </Box>
+                      <Typography variant="body2" sx={{ color: '#64748B', maxWidth: 480, mx: 'auto', mb: 2 }}>
+                        All approved purchase orders have already been received. Received POs are automatically hidden from inward selection. You can receive stock directly without a PO or create a new PO first.
+                      </Typography>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() => setMode('without_po')}
+                        sx={{
+                          textTransform: 'none',
+                          fontWeight: 700,
+                          borderRadius: 2,
+                          borderColor: '#CBD5E1',
+                          color: '#334155',
+                          '&:hover': { borderColor: '#94A3B8', bgcolor: '#FFFFFF' }
+                        }}
+                      >
+                        Switch to Direct Consignment Inward
+                      </Button>
+                    </Paper>
+                  ) : (
+                    <FormControl fullWidth margin="normal">
+                      <InputLabel>Select Purchase Order *</InputLabel>
+                      <Select
+                        value={selectedPoId}
+                        label="Select Purchase Order *"
+                        onChange={(e) => handlePoSelect(e.target.value)}
+                      >
+                        {availablePurchaseOrders.map((po) => (
+                          <MenuItem key={po.Id} value={po.Id}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                              <span><strong>{po.DocumentNumber}</strong> &mdash; {po.VendorName}</span>
+                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                <Chip label={po.Status || 'Sent'} size="small" sx={{ fontSize: 11, height: 20 }} />
+                                <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{Number(po.TotalAmount || 0).toFixed(2)}</Typography>
+                              </Box>
                             </Box>
-                          </Box>
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <Typography variant="caption" sx={{ color: '#64748B', mt: 0.8, display: 'block' }}>
+                        Showing {availablePurchaseOrders.length} pending purchase order{availablePurchaseOrders.length > 1 ? 's' : ''} (received POs are hidden).
+                      </Typography>
+                    </FormControl>
+                  )
                 ) : (
                   <Box>
                     <FormControl fullWidth margin="normal">

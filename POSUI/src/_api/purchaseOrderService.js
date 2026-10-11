@@ -99,6 +99,7 @@ export const purchaseOrderService = {
     try {
       const params = new URLSearchParams();
       if (filters.status && filters.status !== 'All') params.append('status', filters.status);
+      if (filters.excludeStatus) params.append('excludeStatus', filters.excludeStatus);
       if (filters.vendorId) params.append('vendorId', filters.vendorId);
       if (filters.search) params.append('search', filters.search);
       const data = await apiClient.get(`/api/purchase-orders?${params.toString()}`);
@@ -114,6 +115,9 @@ export const purchaseOrderService = {
     let list = getStoredPOs().filter(p => p.RecordStatus === 0);
     if (filters.status && filters.status !== 'All') {
       list = list.filter(p => p.Status.toLowerCase() === filters.status.toLowerCase());
+    }
+    if (filters.excludeStatus) {
+      list = list.filter(p => (p.Status || '').toLowerCase() !== filters.excludeStatus.toLowerCase());
     }
     if (filters.vendorId) {
       list = list.filter(p => p.VendorId === filters.vendorId);

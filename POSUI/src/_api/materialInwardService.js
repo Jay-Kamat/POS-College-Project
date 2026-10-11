@@ -123,6 +123,23 @@ export const materialInwardService = {
       const list = getStoredInwards();
       list.unshift(normalized);
       saveStoredInwards(list);
+
+      // Sync local storage PO status to Received
+      if (inwardData.PurchaseOrderId) {
+        try {
+          const localPos = localStorage.getItem('pos_purchase_orders');
+          if (localPos) {
+            const parsed = JSON.parse(localPos);
+            const idx = parsed.findIndex(p => p.Id === inwardData.PurchaseOrderId || p.DocumentNumber === inwardData.PurchaseOrderId);
+            if (idx !== -1) {
+              parsed[idx].Status = 'Received';
+              parsed[idx].Updated = new Date().toISOString();
+              localStorage.setItem('pos_purchase_orders', JSON.stringify(parsed));
+            }
+          }
+        } catch (e) {}
+      }
+
       return normalized;
     } catch (e) {
       console.warn('Fallback local createInward:', e.message);
@@ -141,6 +158,23 @@ export const materialInwardService = {
       const list = getStoredInwards();
       list.unshift(newInward);
       saveStoredInwards(list);
+
+      // Also update local storage PO status in fallback mode
+      if (inwardData.PurchaseOrderId) {
+        try {
+          const localPos = localStorage.getItem('pos_purchase_orders');
+          if (localPos) {
+            const parsed = JSON.parse(localPos);
+            const idx = parsed.findIndex(p => p.Id === inwardData.PurchaseOrderId || p.DocumentNumber === inwardData.PurchaseOrderId);
+            if (idx !== -1) {
+              parsed[idx].Status = 'Received';
+              parsed[idx].Updated = new Date().toISOString();
+              localStorage.setItem('pos_purchase_orders', JSON.stringify(parsed));
+            }
+          }
+        } catch (e) {}
+      }
+
       return newInward;
     }
   },

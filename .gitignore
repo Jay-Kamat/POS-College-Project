@@ -1,0 +1,64 @@
+# ===================================================================
+# POS & Billing System - Root Git Ignore Rules
+# Strictly prevents secret leakage, environment files & credentials
+# ===================================================================
+
+# Environment Variables & Secret Files
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+!.env.example
+
+# Cryptographic Keys, Certs & Credentials
+*.key
+*.pem
+*.crt
+*.cert
+*.pfx
+*.p12
+*.keystore
+id_rsa
+id_ecdsa
+id_ed25519
+
+# WhatsApp Client Sessions & Baileys Auth Tokens
+auth_info_baileys/
+**/auth_info_baileys/
+**/auth_info_baileys/*
+**/session/
+**/sessions/
+
+# Node Dependencies
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# .NET & C# Build Artifacts
+**/bin/
+**/obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Frontend Build Artifacts
+POSUI/dist/
+dist/
+build/
+
+# Operating System & Editor Files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

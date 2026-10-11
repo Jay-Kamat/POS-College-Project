@@ -14,7 +14,6 @@
     "@mui/icons-material": "^5.15.15",
     "@mui/material": "^5.15.15",
     "@reduxjs/toolkit": "^2.2.3",
-    "firebase": "^10.11.0",
     "formik": "^2.4.5",
     "html5-qrcode": "^2.3.8",
     "qrcode.react": "^4.2.0",

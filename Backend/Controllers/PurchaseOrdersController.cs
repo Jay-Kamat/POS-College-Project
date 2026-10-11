@@ -17,9 +17,13 @@ public class PurchaseOrdersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetPurchaseOrders([FromQuery] string? status, [FromQuery] string? vendorId, [FromQuery] string? search)
+    public async Task<IActionResult> GetPurchaseOrders(
+        [FromQuery] string? status, 
+        [FromQuery] string? vendorId, 
+        [FromQuery] string? search,
+        [FromQuery] string? excludeStatus)
     {
-        var list = await _db.GetPurchaseOrdersAsync(status, vendorId, search);
+        var list = await _db.GetPurchaseOrdersAsync(status, vendorId, search, excludeStatus);
         return Ok(list);
     }
 
