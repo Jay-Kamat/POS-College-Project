@@ -90,6 +90,8 @@ public class PosDbService
             clean = parts[^1];
         }
 
+        var baseCode = clean.Contains('-') ? clean.Split('-')[0].Trim() : clean;
+
         using var conn = CreateConn();
         var sql = @"SELECT p.id as Id, p.product_number as ProductNumber, p.name as Name, p.cost as Cost, 
                            COALESCE(p.unit, 'PCS') as Unit, p.ingredients as Ingredients, p.notes as Notes, 
@@ -99,9 +101,10 @@ public class PosDbService
                            p.record_status as RecordStatus, p.created_at as Created, p.updated_at as Updated 
                     FROM products p
                     LEFT JOIN categories c ON p.category_id = c.id
-                    WHERE (p.product_number = @Code OR p.id = @Code OR LOWER(p.product_number) = LOWER(@Code)) 
+                    WHERE (p.product_number = @Code OR p.id = @Code OR LOWER(p.product_number) = LOWER(@Code)
+                           OR p.product_number = @BaseCode OR p.id = @BaseCode OR LOWER(p.product_number) = LOWER(@BaseCode)) 
                       AND p.record_status = 0 LIMIT 1";
-        return await conn.QueryFirstOrDefaultAsync<Product>(sql, new { Code = clean });
+        return await conn.QueryFirstOrDefaultAsync<Product>(sql, new { Code = clean, BaseCode = baseCode });
     }
 
     public async Task<Product> CreateProductAsync(Product p)
@@ -865,29 +868,98 @@ public class PosDbService
     }
 
     // -------------------------------------------------------------
-    // Store Profile
+    // Store Profile & Multi-Store Management
     // -------------------------------------------------------------
-    public async Task<Store> GetStoreProfileAsync()
+    public async Task<IEnumerable<Store>> GetStoresAsync()
     {
         using var conn = CreateConn();
-        var sql = "SELECT id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus FROM stores LIMIT 1";
-        var store = await conn.QueryFirstOrDefaultAsync<Store>(sql);
-        return store ?? new Store
+        // Ensure default multi-store outlets exist if database only has 1
+        var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM stores WHERE record_status = 0;");
+        if (count <= 1)
+        {
+            var seedSql = @"
+                INSERT INTO stores (id, name, long_name, address, mobile_number, phone_number, email, food_license_number, gst_number, country, state, invoice_prefix, receipt_footer_text, paper_size, enable_whatsapp_receipt)
+                VALUES 
+                ('store_mum_01', 'DailyMart Express (Mumbai)', 'DailyMart Retail Private Limited - Mumbai Central', 'Plot 12, Commercial Hub, MG Road, Mumbai', '+91 98765 43210', '022-28765432', 'mumbai01@dailymart.in', '11522001000123', '27AABCU9603R1ZM', 'India', 'Maharashtra', 'INV-MUM', 'Thank you for shopping at DailyMart Mumbai! No exchange after 7 days.', '80mm', true),
+                ('store_pune_02', 'DailyMart Supercenter (Pune)', 'DailyMart Retail Private Limited - Pune West', 'High Street Phoenix, Senapati Bapat Road, Pune', '+91 98230 11223', '020-25678901', 'pune02@dailymart.in', '11522001000124', '27AABCU9603R1ZN', 'India', 'Maharashtra', 'INV-PUN', 'Thank you for shopping at DailyMart Pune! Save paper, get bills on WhatsApp.', '80mm', true),
+                ('store_blr_03', 'DailyMart Metro (Bangalore)', 'DailyMart Retail Private Limited - Bengaluru Urban', '100 Feet Rd, HAL 2nd Stage, Indiranagar, Bengaluru', '+91 97401 55667', '080-41234567', 'bangalore03@dailymart.in', '11522001000125', '29AABCU9603R1ZO', 'India', 'Karnataka', 'INV-BLR', 'Thank you for shopping at DailyMart Bangalore! Follow us on Instagram @DailyMartIN', '80mm', true)
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    long_name = EXCLUDED.long_name,
+                    address = EXCLUDED.address,
+                    state = EXCLUDED.state,
+                    gst_number = EXCLUDED.gst_number;
+            ";
+            await conn.ExecuteAsync(seedSql);
+        }
+
+        var sql = "SELECT id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus FROM stores WHERE record_status = 0 ORDER BY id;";
+        return await conn.QueryAsync<Store>(sql);
+    }
+
+    public async Task<Store> GetStoreProfileAsync(string? storeId = null)
+    {
+        using var conn = CreateConn();
+        var sql = string.IsNullOrEmpty(storeId)
+            ? "SELECT id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus FROM stores WHERE record_status = 0 ORDER BY id LIMIT 1"
+            : "SELECT id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus FROM stores WHERE id = @StoreId LIMIT 1";
+        
+        var store = await conn.QueryFirstOrDefaultAsync<Store>(sql, new { StoreId = storeId });
+        if (store != null) return store;
+
+        // If specific store was queried and not found, fallback to first active store
+        if (!string.IsNullOrEmpty(storeId))
+        {
+            var fallback = await conn.QueryFirstOrDefaultAsync<Store>("SELECT id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus FROM stores WHERE record_status = 0 ORDER BY id LIMIT 1");
+            if (fallback != null) return fallback;
+        }
+
+        return new Store
         {
             Id = "store_mum_01",
-            Name = "DailyMart Express",
+            Name = "DailyMart Express (Mumbai)",
+            LongName = "DailyMart Retail Private Limited - Mumbai Central",
             Address = "Plot 12, Commercial Hub, MG Road, Mumbai, Maharashtra 400001",
-            MobileNumber = "9876543210",
-            Email = "billing@dailymart.in",
+            MobileNumber = "+91 98765 43210",
+            Email = "mumbai01@dailymart.in",
             GstNumber = "27AABCU9603R1ZM",
             State = "Maharashtra",
             PaperSize = "80mm"
         };
     }
 
+    public async Task<Store> CreateStoreAsync(Store s)
+    {
+        using var conn = CreateConn();
+        if (string.IsNullOrEmpty(s.Id)) s.Id = $"store_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        var sql = @"
+            INSERT INTO stores (id, name, long_name, address, mobile_number, phone_number, email, food_license_number, gst_number, country, state, invoice_prefix, receipt_footer_text, paper_size, enable_whatsapp_receipt, record_status)
+            VALUES (@Id, @Name, @LongName, @Address, @MobileNumber, @PhoneNumber, @Email, @FoodLicenseNumber, @GstNumber, COALESCE(@Country, 'India'), @State, COALESCE(@InvoicePrefix, 'INV'), @ReceiptFooterText, COALESCE(@PaperSize, '80mm'), @EnableWhatsAppReceipt, 0)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                long_name = EXCLUDED.long_name,
+                address = EXCLUDED.address,
+                mobile_number = EXCLUDED.mobile_number,
+                phone_number = EXCLUDED.phone_number,
+                email = EXCLUDED.email,
+                food_license_number = EXCLUDED.food_license_number,
+                gst_number = EXCLUDED.gst_number,
+                country = EXCLUDED.country,
+                state = EXCLUDED.state,
+                invoice_prefix = EXCLUDED.invoice_prefix,
+                receipt_footer_text = EXCLUDED.receipt_footer_text,
+                paper_size = EXCLUDED.paper_size,
+                enable_whatsapp_receipt = EXCLUDED.enable_whatsapp_receipt,
+                updated_at = NOW()
+            RETURNING id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus;
+        ";
+        return await conn.QuerySingleAsync<Store>(sql, s);
+    }
+
     public async Task<Store> UpdateStoreProfileAsync(Store s)
     {
         using var conn = CreateConn();
+        var targetId = string.IsNullOrEmpty(s.Id) ? "store_mum_01" : s.Id;
         var sql = @"
             UPDATE stores
             SET name = COALESCE(@Name, name),
@@ -923,7 +995,7 @@ public class PosDbService
             s.ReceiptFooterText,
             s.PaperSize,
             s.EnableWhatsAppReceipt,
-            Id = string.IsNullOrEmpty(s.Id) ? "store_mum_01" : s.Id
+            Id = targetId
         });
     }
 
@@ -1283,6 +1355,20 @@ public class PosDbService
 
             if (!string.IsNullOrWhiteSpace(poId))
             {
+                var poStatus = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT status FROM purchase_orders WHERE id = @PoId AND record_status = 0",
+                    new { PoId = poId }, transaction: tx);
+
+                if (poStatus == null)
+                {
+                    throw new InvalidOperationException($"Purchase Order '{poId}' was not found.");
+                }
+
+                if (!poStatus.Equals("Sent", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Cannot receive Purchase Order '{poId}' because its status is '{poStatus}'. Only 'Sent' purchase orders can be inwarded.");
+                }
+
                 await conn.ExecuteAsync(@"
                     UPDATE purchase_orders
                     SET status = 'Received', updated_at = NOW()

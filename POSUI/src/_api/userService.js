@@ -1,56 +1,65 @@
 import apiClient from './apiClient';
 
-// Users & RBAC Matrix Service Layer
+// Users & RBAC Matrix Service Layer (Admin -> Store Manager -> Cashier -> Inventory)
 const INITIAL_USERS = [
   {
     Id: 'user_01',
     Name: 'Jay Sharma',
     Email: 'admin@dailymart.in',
     Role: 'Admin',
-    Store: 'DailyMart Express (Mumbai)',
+    Store: 'All Outlets (Super Admin)',
     Status: 'Active',
-    LastLogin: '2026-10-04, 07:45 PM'
+    LastLogin: '2026-10-12, 02:45 PM'
   },
   {
     Id: 'user_02',
+    Name: 'Amit Deshmukh',
+    Email: 'manager.mumbai@dailymart.in',
+    Role: 'Store Manager',
+    Store: 'DailyMart Express (Mumbai)',
+    Status: 'Active',
+    LastLogin: '2026-10-12, 01:15 PM'
+  },
+  {
+    Id: 'user_03',
     Name: 'Pooja Nair',
     Email: 'cashier1@dailymart.in',
     Role: 'Cashier',
     Store: 'DailyMart Express (Mumbai)',
     Status: 'Active',
-    LastLogin: '2026-10-04, 06:12 PM'
+    LastLogin: '2026-10-12, 12:40 PM'
   },
   {
-    Id: 'user_03',
+    Id: 'user_04',
     Name: 'Vikram Singh',
     Email: 'inventory@dailymart.in',
-    Role: 'Inventory Manager',
+    Role: 'Inventory',
     Store: 'DailyMart Express (Mumbai)',
     Status: 'Active',
-    LastLogin: '2026-10-04, 05:30 PM'
+    LastLogin: '2026-10-12, 11:20 AM'
   }
 ];
 
 const INITIAL_PERMISSIONS_MATRIX = [
-  { module: 'Dashboard', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
-  { module: 'POS Billing Terminal', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: true, create: true, edit: true, delete: false, export: true }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
-  { module: 'Invoices & Receipts', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: true, create: true, edit: false, delete: false, export: true }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
-  { module: 'Product Catalog', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: true, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: true, export: true } },
-  { module: 'Vendors Directory', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
-  { module: 'Purchase Orders', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
-  { module: 'Material Inward & Barcoding', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
-  { module: 'Vendor Material Returns', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
-  { module: 'Customer Directory', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: true, create: true, edit: true, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
-  { module: 'Reports & Analytics', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: false, edit: false, delete: false, export: true } },
-  { module: 'Settings & Tax Slabs', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
-  { module: 'User Management & Roles', admin: { view: true, create: true, edit: true, delete: true, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
+  { module: 'Dashboard', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
+  { module: 'POS Billing Terminal', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: true, create: true, edit: true, delete: false, export: true }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
+  { module: 'Invoices & Receipts', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: true, create: true, edit: false, delete: false, export: true }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
+  { module: 'Product Catalog', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: true, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: true, export: true } },
+  { module: 'Vendors Directory', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
+  { module: 'Purchase Orders', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
+  { module: 'Material Inward & Barcoding', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
+  { module: 'Vendor Material Returns', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: true, edit: true, delete: false, export: true } },
+  { module: 'Customer Directory', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: true }, cashier: { view: true, create: true, edit: true, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
+  { module: 'Reports & Analytics', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: false, edit: false, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: true, create: false, edit: false, delete: false, export: true } },
+  { module: 'Store Profile & Settings', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: false, edit: true, delete: false, export: true }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
+  { module: 'User Management & Roles', admin: { view: true, create: true, edit: true, delete: true, export: true }, storeManager: { view: true, create: true, edit: true, delete: false, export: false }, cashier: { view: false, create: false, edit: false, delete: false, export: false }, inventory: { view: false, create: false, edit: false, delete: false, export: false } },
 ];
 
 export const userService = {
   getUsers: async () => {
     try {
       const data = await apiClient.get('/api/users');
-      if (Array.isArray(data)) {
+      if (Array.isArray(data) && data.length > 0) {
         localStorage.setItem('pos_users', JSON.stringify(data));
         return data;
       }
@@ -75,8 +84,9 @@ export const userService = {
     return {
       totalUsers: users.length,
       admins: users.filter(u => u.Role?.toLowerCase() === 'admin').length,
+      storeManagers: users.filter(u => u.Role?.toLowerCase().includes('manager')).length,
       cashiers: users.filter(u => u.Role?.toLowerCase() === 'cashier').length,
-      inventoryManagers: users.filter(u => u.Role?.toLowerCase().includes('inventory')).length
+      inventory: users.filter(u => u.Role?.toLowerCase().includes('inventory')).length
     };
   },
 

@@ -16,9 +16,9 @@ public class SettingsController : ControllerBase
     }
 
     [HttpGet("store-profile")]
-    public async Task<IActionResult> GetStoreProfile()
+    public async Task<IActionResult> GetStoreProfile([FromQuery] string? storeId)
     {
-        var store = await _db.GetStoreProfileAsync();
+        var store = await _db.GetStoreProfileAsync(storeId);
         return Ok(store);
     }
 

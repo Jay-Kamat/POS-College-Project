@@ -1,3 +1,6 @@
+import QRCode from 'qrcode';
+import JsBarcode from 'jsbarcode';
+
 /**
  * Universal POS Printing Service
  * Conforms to Indian GST compliance and thermal/A4 printing specifications in docs/INVOICE_RECEIPT_SPEC.md.
@@ -5,7 +8,7 @@
  * Supports:
  *  1. printThermalReceipt(invoice, options) - 80mm / 58mm POS thermal receipt rolls
  *  2. printA4Invoice(invoice, options)      - Formal GST Tax Invoice on A4 paper
- *  3. printBarcodeLabels(items, options)    - Shelf/product barcode stickers
+ *  3. printBarcodeLabels(items, options)    - Shelf/product barcode stickers (Unit QR & Barcode)
  *  4. printDebitNote(note, options)         - Vendor Material Return Debit Note
  */
 
@@ -677,90 +680,273 @@ export function printA4Invoice(invoice, options = {}) {
 }
 
 /**
- * 3. Shelf Barcode Labels Printing (Material Inward)
+ * 3. Unique Unit QR & Barcode Labels Printing (Material Inward)
+ * Supports multi-unit packet serialization (e.g. 7 milk packets -> 7 unique stickers),
+ * rendered with vector SVG QR codes and Code 128 barcodes, printable in one PDF document.
  */
-export function printBarcodeLabels(items, options = {}) {
-  if (!items || items.length === 0) return;
+export async function printBarcodeLabels(itemsOrUnits, options = {}) {
+  if (!itemsOrUnits || itemsOrUnits.length === 0) return;
+
+  const storeName = options.storeName || 'POS Supermarket';
+  const layout = options.layout || 'sheet'; // 'sheet' (A4 Multi-label PDF) | 'thermal' (Individual roll)
+
+  // 1. Expand items into individual unit labels
+  const unitLabels = [];
+  (itemsOrUnits || []).forEach((item, itemIdx) => {
+    if (item.Serial && (item.UnitIndex !== undefined || item.QrPayload)) {
+      // Already a unit-level label object
+      unitLabels.push(item);
+    } else if (Array.isArray(item.UnitBarcodes) && item.UnitBarcodes.length > 0) {
+      // Line item containing precomputed UnitBarcodes
+      item.UnitBarcodes.forEach(u => unitLabels.push(u));
+    } else {
+      // Line item without UnitBarcodes - expand according to ReceivedQty
+      const baseBarcode = item.Barcode || item.ProductNumber || `200100${String(Date.now()).slice(-4)}${String(itemIdx + 1).padStart(2, '0')}`;
+      const qty = Math.max(1, Math.round(Number(item.ReceivedQty || item.Quantity || 1)));
+      const padLen = qty >= 100 ? 3 : 2;
+      for (let i = 1; i <= qty; i++) {
+        const serial = `${baseBarcode}-${String(i).padStart(padLen, '0')}`;
+        const qrPayload = JSON.stringify({
+          barcode: baseBarcode,
+          serial: serial,
+          id: item.ProductId,
+          name: item.ProductName,
+          unit: `${i}/${qty}`,
+          exp: item.ExpiryDate || '',
+          mrp: Number((Number(item.Rate || 0) * 1.3).toFixed(2))
+        });
+        unitLabels.push({
+          UnitIndex: i,
+          TotalUnits: qty,
+          Serial: serial,
+          Barcode: baseBarcode,
+          QrPayload: qrPayload,
+          ProductName: item.ProductName,
+          ProductId: item.ProductId,
+          ExpiryDate: item.ExpiryDate || 'N/A',
+          Rate: Number(item.Rate || 0),
+          Mrp: Number((Number(item.Rate || 0) * 1.3).toFixed(2)),
+          Unit: item.Unit || 'PCS'
+        });
+      }
+    }
+  });
+
+  if (unitLabels.length === 0) return;
+
+  // 2. Generate vector SVG for each unit's QR code & Barcode
+  const cardsHtml = await Promise.all(unitLabels.map(async (unit) => {
+    let qrSvg = '';
+    try {
+      qrSvg = await QRCode.toString(unit.QrPayload || unit.Serial || unit.Barcode, {
+        type: 'svg',
+        margin: 0,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#000000', light: '#ffffff' }
+      });
+    } catch (e) {
+      qrSvg = `<div style="font-size:9px;color:#dc2626;padding:4px;">QR Error</div>`;
+    }
+
+    let barcodeSvg = '';
+    try {
+      const svgNode = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      JsBarcode(svgNode, unit.Serial || unit.Barcode, {
+        format: 'CODE128',
+        width: 1.25,
+        height: 26,
+        displayValue: false,
+        margin: 0
+      });
+      barcodeSvg = svgNode.outerHTML;
+    } catch (e) {
+      barcodeSvg = '';
+    }
+
+    const mrp = unit.Mrp ? Number(unit.Mrp).toFixed(2) : (Number(unit.Rate || 0) * 1.3).toFixed(2);
+    const unitBadge = unit.TotalUnits ? `PKT ${unit.UnitIndex}/${unit.TotalUnits}` : 'UNIT 1/1';
+
+    return `
+      <div class="label-card">
+        <div class="card-header">
+          <span class="store-tag">${storeName}</span>
+          <span class="pkt-badge">${unitBadge}</span>
+        </div>
+
+        <div class="prod-title" title="${unit.ProductName}">${unit.ProductName}</div>
+
+        <div class="code-section">
+          <div class="qr-container">
+            ${qrSvg}
+          </div>
+          <div class="barcode-container">
+            ${barcodeSvg ? `<div class="barcode-svg-wrap">${barcodeSvg}</div>` : ''}
+            <div class="serial-text">${unit.Serial || unit.Barcode}</div>
+            <div class="unit-desc">NET QTY: 1 ${unit.Unit || 'PCS'}</div>
+          </div>
+        </div>
+
+        <div class="card-footer">
+          <span class="exp-date">EXP: <strong>${unit.ExpiryDate || 'N/A'}</strong></span>
+          <span class="mrp-price">MRP: <strong>₹${mrp}</strong></span>
+        </div>
+      </div>
+    `;
+  }));
 
   const html = `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Barcode Shelf Labels</title>
+  <title>Material Inward Unit QR Labels (${unitLabels.length} Packets)</title>
   <style>
     @page {
-      size: A4 portrait;
-      margin: 10mm;
+      size: ${layout === 'thermal' ? '50mm 40mm' : 'A4 portrait'};
+      margin: ${layout === 'thermal' ? '1mm' : '8mm'};
+    }
+    * {
+      box-sizing: border-box;
     }
     body {
-      font-family: sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       margin: 0;
       padding: 0;
+      background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
     .grid {
-      display: grid;
+      display: ${layout === 'thermal' ? 'block' : 'grid'};
       grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
+      gap: 5mm;
     }
     .label-card {
-      border: 1.5px solid #000;
+      border: 1.5px solid #0f172a;
       border-radius: 6px;
-      padding: 8px;
-      text-align: center;
+      padding: 6px 8px;
+      background: #ffffff;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
       page-break-inside: avoid;
+      break-inside: avoid;
+      ${layout === 'thermal' ? 'width: 48mm; height: 38mm; page-break-after: always; break-after: page; margin-bottom: 2mm;' : 'min-height: 52mm; height: 55mm;'}
+      box-sizing: border-box;
+      overflow: hidden;
     }
-    .prod-name {
-      font-size: 12px;
-      font-weight: 700;
-      margin-bottom: 4px;
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 2px;
+      margin-bottom: 3px;
+    }
+    .store-tag {
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 0.8px;
+      color: #0f172a;
+      text-transform: uppercase;
+    }
+    .pkt-badge {
+      font-size: 7.5px;
+      font-weight: 800;
+      background: #0f172a;
+      color: #ffffff;
+      padding: 1px 5px;
+      border-radius: 3px;
+      letter-spacing: 0.5px;
+    }
+    .prod-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: #0f172a;
+      line-height: 1.15;
+      margin-bottom: 3px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .barcode-art {
-      font-family: monospace;
-      letter-spacing: 4px;
-      font-size: 18px;
-      font-weight: 700;
-      margin: 4px 0;
+    .code-section {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 2px 0 3px 0;
+      flex: 1;
     }
-    .barcode-num {
-      font-family: monospace;
-      font-size: 11px;
-      letter-spacing: 1px;
-      margin-bottom: 4px;
+    .qr-container {
+      width: 58px;
+      height: 58px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    .footer-row {
+    .qr-container svg {
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+    }
+    .barcode-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .barcode-svg-wrap {
+      width: 100%;
+      height: 24px;
+      overflow: hidden;
+    }
+    .barcode-svg-wrap svg {
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+    }
+    .serial-text {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 9.5px;
+      font-weight: 800;
+      letter-spacing: 0.8px;
+      color: #0f172a;
+      margin-top: 1px;
+    }
+    .unit-desc {
+      font-size: 8px;
+      color: #64748b;
+      font-weight: 600;
+    }
+    .card-footer {
       display: flex;
       justify-content: space-between;
+      align-items: center;
+      border-top: 1px dashed #64748b;
+      padding-top: 3px;
+      margin-top: auto;
+      font-size: 9px;
+      color: #334155;
+    }
+    .exp-date strong {
+      color: #b45309;
+    }
+    .mrp-price strong {
+      color: #0f172a;
       font-size: 10.5px;
-      font-weight: 600;
-      border-top: 1px dashed #666;
-      padding-top: 4px;
-      margin-top: 4px;
     }
   </style>
 </head>
 <body>
   <div class="grid">
-    ${items.map(item => `
-      <div class="label-card">
-        <div class="prod-name">${item.ProductName}</div>
-        <div class="barcode-art">||| | || |||| | |||</div>
-        <div class="barcode-num">${item.Barcode || item.ProductNumber || '200100000000'}</div>
-        <div class="footer-row">
-          <span>Exp: ${item.ExpiryDate || 'N/A'}</span>
-          <span>MRP: ₹${(Number(item.Rate || 0) * 1.3).toFixed(2)}</span>
-        </div>
-      </div>
-    `).join('')}
+    ${cardsHtml.join('')}
   </div>
 </body>
 </html>
 `;
 
-  return printHtmlViaIframe(html, 'Barcode_Labels');
+  return printHtmlViaIframe(html, `Unit_Barcodes_${unitLabels.length}_Labels`);
 }
 
 /**

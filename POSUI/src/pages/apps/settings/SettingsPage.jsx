@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
 import {
   Box,
   Paper,
@@ -53,10 +54,13 @@ import {
   Refresh as RefreshIcon,
   Send as SendIcon,
   BatteryChargingFull as BatteryIcon,
-  OpenInNew as OpenInNewIcon
+  OpenInNew as OpenInNewIcon,
+  Lock as LockIcon,
+  Star as StarIcon
 } from '@mui/icons-material';
 import settingService from '../../../_api/settingService';
 import whatsappService from '../../../_api/whatsappService';
+import { setActiveStore } from '../../../store/authSlice';
 
 const INDIAN_STATES = [
   'Maharashtra',
@@ -80,8 +84,33 @@ const INDIAN_STATES = [
 ];
 
 export default function SettingsPage() {
+  const dispatch = useDispatch();
+  const { user, activeStore } = useSelector(state => state.auth);
+
+  const currentRole = user?.role || 'Admin';
+  const isAdmin = currentRole === 'Admin';
+  const isStoreManager = currentRole === 'Store Manager';
+  const canEditProfile = isAdmin || isStoreManager;
+
   const [activeTab, setActiveTab] = useState(0);
+  const [stores, setStores] = useState([]);
+  const [selectedStoreId, setSelectedStoreId] = useState(activeStore?.id || 'store_mum_01');
+  const [createStoreOpen, setCreateStoreOpen] = useState(false);
+  const [newStore, setNewStore] = useState({
+    Name: '',
+    LongName: '',
+    Address: '',
+    State: 'Maharashtra',
+    GstNumber: '',
+    FoodLicenseNumber: '',
+    MobileNumber: '',
+    PhoneNumber: '',
+    Email: '',
+    InvoicePrefix: 'INV'
+  });
+
   const [profile, setProfile] = useState({
+    Id: 'store_mum_01',
     Name: 'DailyMart Express',
     LongName: 'DailyMart Retail Private Limited',
     Address: 'Plot 12, Commercial Hub, MG Road, Mumbai',
@@ -93,7 +122,7 @@ export default function SettingsPage() {
     Country: 'India',
     State: 'Maharashtra',
     InvoicePrefix: 'INV',
-    ReceiptFooterText: 'Thank you for shopping with us! Goods once sold cannot be returned without original bill.',
+    ReceiptFooterText: 'Thank you for shopping with us! No exchange after 7 days.',
     PaperSize: '80mm',
     EnableWhatsAppReceipt: true
   });
@@ -113,12 +142,23 @@ export default function SettingsPage() {
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
   const [saving, setSaving] = useState(false);
 
+  // Load stores list and target store profile
   useEffect(() => {
     async function load() {
       try {
-        const p = await settingService.getStoreProfile();
+        const storeList = await settingService.getStores();
+        setStores(storeList || []);
+
+        const targetId = isAdmin 
+          ? (selectedStoreId || activeStore?.id || storeList[0]?.Id || 'store_mum_01')
+          : (activeStore?.id || 'store_mum_01');
+        
+        setSelectedStoreId(targetId);
+
+        const p = await settingService.getStoreProfile(targetId);
         if (p) {
           setProfile({
+            Id: p.Id || p.id || targetId,
             Name: p.Name || p.name || 'DailyMart Express',
             LongName: p.LongName || p.longName || 'DailyMart Retail Private Limited',
             Address: p.Address || p.address || 'Plot 12, Commercial Hub, MG Road, Mumbai',
@@ -135,8 +175,10 @@ export default function SettingsPage() {
             EnableWhatsAppReceipt: p.EnableWhatsAppReceipt ?? p.enableWhatsAppReceipt ?? true
           });
         }
+
         const rates = await settingService.getTaxRates();
         setTaxRates(rates || []);
+
         const wa = await whatsappService.checkStatus();
         if (wa) {
           setWaStatus(wa);
@@ -152,7 +194,7 @@ export default function SettingsPage() {
       }
     }
     load();
-  }, []);
+  }, [isAdmin]);
 
   // Real-time polling when WhatsApp tab is active and phone is not yet connected
   useEffect(() => {
@@ -254,14 +296,110 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSelectStore = async (storeId) => {
+    setSelectedStoreId(storeId);
+    try {
+      const p = await settingService.getStoreProfile(storeId);
+      if (p) {
+        setProfile({
+          Id: p.Id || p.id || storeId,
+          Name: p.Name || p.name || '',
+          LongName: p.LongName || p.longName || '',
+          Address: p.Address || p.address || '',
+          MobileNumber: p.MobileNumber || p.mobileNumber || '',
+          PhoneNumber: p.PhoneNumber || p.phoneNumber || '',
+          Email: p.Email || p.email || '',
+          FoodLicenseNumber: p.FoodLicenseNumber || p.foodLicenseNumber || '',
+          GstNumber: p.GstNumber || p.gstNumber || '',
+          Country: p.Country || p.country || 'India',
+          State: p.State || p.state || 'Maharashtra',
+          InvoicePrefix: p.InvoicePrefix || p.invoicePrefix || 'INV',
+          ReceiptFooterText: p.ReceiptFooterText || p.receiptFooterText || '',
+          PaperSize: p.PaperSize || p.paperSize || '80mm',
+          EnableWhatsAppReceipt: p.EnableWhatsAppReceipt ?? p.enableWhatsAppReceipt ?? true
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load store profile:', err);
+    }
+  };
+
+  const handleMakeActiveStore = () => {
+    dispatch(setActiveStore({
+      id: profile.Id || selectedStoreId,
+      name: profile.Name,
+      address: profile.Address,
+      state: profile.State,
+      gstin: profile.GstNumber,
+      fssai: profile.FoodLicenseNumber,
+      phone: profile.MobileNumber
+    }));
+    setToast({ open: true, message: `"${profile.Name}" is now the active POS Terminal outlet!`, severity: 'success' });
+  };
+
+  const handleCreateStore = async () => {
+    if (!newStore.Name.trim()) {
+      setToast({ open: true, message: 'Display Store Name is required.', severity: 'warning' });
+      return;
+    }
+    try {
+      const created = await settingService.createStore({
+        ...newStore,
+        Id: `store_${Date.now()}`
+      });
+      setCreateStoreOpen(false);
+      setNewStore({
+        Name: '',
+        LongName: '',
+        Address: '',
+        State: 'Maharashtra',
+        GstNumber: '',
+        FoodLicenseNumber: '',
+        MobileNumber: '',
+        PhoneNumber: '',
+        Email: '',
+        InvoicePrefix: 'INV'
+      });
+      const updatedList = await settingService.getStores();
+      setStores(updatedList);
+      if (created?.Id) {
+        await handleSelectStore(created.Id);
+      }
+      setToast({ open: true, message: `New store branch "${created.Name || newStore.Name}" registered!`, severity: 'success' });
+    } catch (err) {
+      setToast({ open: true, message: 'Failed to create new store outlet.', severity: 'error' });
+    }
+  };
+
   const handleSaveProfile = async () => {
+    if (!canEditProfile) {
+      setToast({ open: true, message: 'Access Denied: Store profile can only be edited by Store Manager or Admin.', severity: 'error' });
+      return;
+    }
     setSaving(true);
     try {
-      const updated = await settingService.updateStoreProfile(profile);
+      const updated = await settingService.updateStoreProfile({
+        ...profile,
+        Id: selectedStoreId || profile.Id || 'store_mum_01'
+      });
       if (updated) {
         setProfile((prev) => ({ ...prev, ...updated }));
+        // If this store is currently active in Redux, update activeStore too!
+        if ((updated.Id || updated.id) === (activeStore?.id || activeStore?.Id)) {
+          dispatch(setActiveStore({
+            id: updated.Id || updated.id,
+            name: updated.Name || updated.name,
+            address: updated.Address || updated.address,
+            state: updated.State || updated.state,
+            gstin: updated.GstNumber || updated.gstNumber,
+            fssai: updated.FoodLicenseNumber || updated.foodLicenseNumber,
+            phone: updated.MobileNumber || updated.mobileNumber
+          }));
+        }
       }
-      setToast({ open: true, message: 'Store profile settings saved to database successfully!', severity: 'success' });
+      const updatedStores = await settingService.getStores();
+      setStores(updatedStores || []);
+      setToast({ open: true, message: `Store profile for "${profile.Name}" saved to database successfully!`, severity: 'success' });
     } catch (err) {
       setToast({ open: true, message: 'Failed to update store profile.', severity: 'error' });
     } finally {
@@ -347,6 +485,132 @@ export default function SettingsPage() {
         {/* TAB 0: Store Profile */}
         {activeTab === 0 && (
           <Box sx={{ p: { xs: 2.5, sm: 3.5 } }}>
+            {/* Top Toolbar: Store Selection (Admin Only) */}
+            {isAdmin && (
+              <Paper
+                sx={{
+                  p: 2,
+                  mb: 3,
+                  borderRadius: 2.5,
+                  bgcolor: '#F8FAFC',
+                  border: '1px solid #CBD5E1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 2
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+                  <FormControl size="small" sx={{ minWidth: 290 }}>
+                    <InputLabel id="admin-store-select-label">Select Store Outlet (Admin Exclusive)</InputLabel>
+                    <Select
+                      labelId="admin-store-select-label"
+                      value={selectedStoreId}
+                      label="Select Store Outlet (Admin Exclusive)"
+                      onChange={(e) => handleSelectStore(e.target.value)}
+                      sx={{ bgcolor: '#FFFFFF', fontWeight: 600 }}
+                    >
+                      {stores.map((s) => {
+                        const sid = s.Id || s.id;
+                        const isActive = sid === (activeStore?.id || activeStore?.Id);
+                        return (
+                          <MenuItem key={sid} value={sid}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%', justifyContent: 'space-between' }}>
+                              <span>{s.Name || s.name}</span>
+                              {isActive && (
+                                <Chip label="Active Outlet" size="small" color="primary" sx={{ height: 20, fontSize: 10, fontWeight: 700 }} />
+                              )}
+                            </Box>
+                          </MenuItem>
+                        );
+                      })}
+                    </Select>
+                  </FormControl>
+
+                  {selectedStoreId !== (activeStore?.id || activeStore?.Id) ? (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<StarIcon />}
+                      onClick={handleMakeActiveStore}
+                      sx={{ textTransform: 'none', fontWeight: 700, borderColor: '#3B5BDB', color: '#3B5BDB' }}
+                    >
+                      Set as Active POS Outlet
+                    </Button>
+                  ) : (
+                    <Chip
+                      icon={<CheckCircleIcon sx={{ fontSize: 16 }} />}
+                      label="Currently Active POS Outlet"
+                      color="success"
+                      size="small"
+                      sx={{ fontWeight: 700 }}
+                    />
+                  )}
+                </Box>
+
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={() => setCreateStoreOpen(true)}
+                    sx={{ bgcolor: '#3B5BDB', fontWeight: 700, textTransform: 'none', '&:hover': { bgcolor: '#2B44B8' } }}
+                  >
+                    + Register New Store Branch
+                  </Button>
+                </Box>
+              </Paper>
+            )}
+
+            {/* Store Manager Edit Authorization Card */}
+            {isStoreManager && (
+              <Paper
+                sx={{
+                  p: 2,
+                  mb: 3,
+                  borderRadius: 2.5,
+                  bgcolor: '#F0FDF4',
+                  border: '1px solid #86EFAC',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 2
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Avatar sx={{ bgcolor: '#16A34A', width: 42, height: 42 }}>
+                    <StoreIcon sx={{ color: 'white' }} />
+                  </Avatar>
+                  <Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#166534' }}>
+                        Assigned Outlet: {profile.Name}
+                      </Typography>
+                      <Chip label="Store Manager" size="small" sx={{ bgcolor: '#DCFCE7', color: '#15803D', fontWeight: 700 }} />
+                    </Box>
+                    <Typography variant="body2" sx={{ color: '#15803D' }}>
+                      As Store Manager, you are authorized to edit and update your store profile, legal credentials, GSTIN, receipt terms, and contact numbers.
+                    </Typography>
+                  </Box>
+                </Box>
+                <Chip
+                  icon={<CheckCircleIcon sx={{ color: '#16A34A !important' }} />}
+                  label="Profile Editing Enabled"
+                  variant="outlined"
+                  sx={{ fontWeight: 700, color: '#166534', borderColor: '#86EFAC', bgcolor: 'white' }}
+                />
+              </Paper>
+            )}
+
+            {/* Read-Only Notice for Cashier or Inventory */}
+            {!canEditProfile && (
+              <Alert severity="info" icon={<LockIcon />} sx={{ mb: 3, borderRadius: 2 }}>
+                <strong>Read-Only View:</strong> You are signed in as <strong>{currentRole}</strong>. Store profile settings can only be edited by the <strong>Store Manager</strong> or <strong>Admin</strong>.
+              </Alert>
+            )}
+
             {/* Store Profile Header Card */}
             <Paper
               sx={{
@@ -373,22 +637,22 @@ export default function SettingsPage() {
                     boxShadow: '0 4px 12px rgba(37,99,235,0.4)'
                   }}
                 >
-                  {profile.Name.slice(0, 2).toUpperCase()}
+                  {(profile.Name || 'DM').slice(0, 2).toUpperCase()}
                 </Avatar>
                 <Box>
                   <Typography variant="h5" sx={{ fontWeight: 800 }}>
-                    {profile.Name}
+                    {profile.Name || 'Store Outlet'}
                   </Typography>
                   <Typography variant="body2" sx={{ color: '#94A3B8' }}>
-                    {profile.LongName}
+                    {profile.LongName || 'Registered Entity'}
                   </Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
                     <Typography variant="caption" sx={{ fontFamily: 'monospace', color: '#CBD5E1' }}>
-                      GSTIN: {profile.GstNumber}
+                      GSTIN: {profile.GstNumber || 'Not specified'}
                     </Typography>
                     <Typography variant="caption" sx={{ color: '#64748B' }}>•</Typography>
                     <Typography variant="caption" sx={{ fontFamily: 'monospace', color: '#CBD5E1' }}>
-                      FSSAI: {profile.FoodLicenseNumber}
+                      FSSAI: {profile.FoodLicenseNumber || 'Not specified'}
                     </Typography>
                   </Box>
                 </Box>
@@ -396,7 +660,7 @@ export default function SettingsPage() {
 
               <Chip
                 icon={<CheckCircleIcon sx={{ fontSize: '15px !important', color: '#10B981 !important' }} />}
-                label="Active Registered Outlet"
+                label={profile.Id === (activeStore?.id || activeStore?.Id) ? "Active POS Terminal Outlet" : "Registered Outlet"}
                 sx={{
                   bgcolor: 'rgba(255,255,255,0.1)',
                   color: '#FFFFFF',
@@ -410,6 +674,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="Display Store Name"
                   placeholder="e.g. DailyMart Express"
                   value={profile.Name}
@@ -420,6 +685,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="Registered Legal Entity Name"
                   placeholder="e.g. DailyMart Retail Private Limited"
                   value={profile.LongName}
@@ -431,6 +697,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="GSTIN (15 characters)"
                   placeholder="e.g. 27AABCU9603R1ZM"
                   value={profile.GstNumber}
@@ -441,6 +708,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="FSSAI Food License Number"
                   placeholder="e.g. 11522001000123"
                   value={profile.FoodLicenseNumber}
@@ -452,6 +720,7 @@ export default function SettingsPage() {
               <Grid item xs={12}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="Physical Store Address"
                   placeholder="e.g. Plot 12, Commercial Hub, MG Road, Mumbai"
                   value={profile.Address}
@@ -461,7 +730,7 @@ export default function SettingsPage() {
               </Grid>
 
               <Grid item xs={12} sm={4}>
-                <FormControl fullWidth>
+                <FormControl fullWidth disabled={!canEditProfile}>
                   <InputLabel>State / Province</InputLabel>
                   <Select
                     value={profile.State}
@@ -480,6 +749,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={4}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="Operational Mobile"
                   placeholder="e.g. +91 98765 43210"
                   value={profile.MobileNumber}
@@ -490,6 +760,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={4}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="Landline / Phone"
                   placeholder="e.g. 022-28765432"
                   value={profile.PhoneNumber}
@@ -500,6 +771,7 @@ export default function SettingsPage() {
               <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
+                  disabled={!canEditProfile}
                   label="Contact Email"
                   placeholder="e.g. billing@dailymart.in"
                   value={profile.Email}
@@ -518,12 +790,15 @@ export default function SettingsPage() {
               </Grid>
             </Grid>
 
-            <Box sx={{ mt: 4, display: 'flex', justifyContent: 'flex-end' }}>
+            <Box sx={{ mt: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography variant="body2" sx={{ color: '#64748B' }}>
+                {canEditProfile ? "Changes will reflect on POS receipts, statutory invoices, and tax returns." : "Profile locked for your role."}
+              </Typography>
               <Button
                 variant="contained"
                 startIcon={<SaveIcon />}
                 onClick={handleSaveProfile}
-                disabled={saving}
+                disabled={saving || !canEditProfile}
                 sx={{
                   px: 4,
                   py: 1.2,
@@ -1179,6 +1454,118 @@ export default function SettingsPage() {
             }}
           >
             Register Slab
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Register New Store Branch Dialog (Admin Only) */}
+      <Dialog
+        open={createStoreOpen}
+        onClose={() => setCreateStoreOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3, p: 1 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 800, color: '#111827', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <StoreIcon sx={{ color: '#2563EB' }} />
+          <span>Register New Store Branch Outlet</span>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" sx={{ color: '#64748B', mb: 2 }}>
+            Provision a new supermarket branch or retail outlet under your corporate retail entity.
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              required
+              fullWidth
+              size="small"
+              label="Display Store Name"
+              placeholder="e.g. DailyMart Express (Thane)"
+              value={newStore.Name}
+              onChange={(e) => setNewStore({ ...newStore, Name: e.target.value })}
+            />
+            <TextField
+              fullWidth
+              size="small"
+              label="Registered Legal Entity Name"
+              placeholder="e.g. DailyMart Retail Private Limited"
+              value={newStore.LongName}
+              onChange={(e) => setNewStore({ ...newStore, LongName: e.target.value })}
+            />
+            <TextField
+              required
+              fullWidth
+              size="small"
+              label="Physical Premises Address"
+              placeholder="e.g. Shop 4-6, Ghodbunder Rd, Thane West"
+              value={newStore.Address}
+              onChange={(e) => setNewStore({ ...newStore, Address: e.target.value })}
+            />
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <FormControl size="small" fullWidth>
+                <InputLabel>State / Province</InputLabel>
+                <Select
+                  value={newStore.State}
+                  label="State / Province"
+                  onChange={(e) => setNewStore({ ...newStore, State: e.target.value })}
+                >
+                  {INDIAN_STATES.map((st) => (
+                    <MenuItem key={st} value={st}>{st}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                size="small"
+                label="Invoice Prefix"
+                placeholder="e.g. INV-THA"
+                value={newStore.InvoicePrefix}
+                onChange={(e) => setNewStore({ ...newStore, InvoicePrefix: e.target.value })}
+              />
+            </Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField
+                size="small"
+                label="GSTIN (15 chars)"
+                placeholder="e.g. 27AABCU9603R1ZP"
+                value={newStore.GstNumber}
+                onChange={(e) => setNewStore({ ...newStore, GstNumber: e.target.value.toUpperCase().slice(0, 15) })}
+              />
+              <TextField
+                size="small"
+                label="FSSAI License"
+                placeholder="e.g. 11522001000126"
+                value={newStore.FoodLicenseNumber}
+                onChange={(e) => setNewStore({ ...newStore, FoodLicenseNumber: e.target.value })}
+              />
+            </Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField
+                size="small"
+                label="Operational Mobile"
+                placeholder="e.g. +91 98200 44556"
+                value={newStore.MobileNumber}
+                onChange={(e) => setNewStore({ ...newStore, MobileNumber: e.target.value })}
+              />
+              <TextField
+                size="small"
+                label="Contact Email"
+                placeholder="e.g. thane@dailymart.in"
+                value={newStore.Email}
+                onChange={(e) => setNewStore({ ...newStore, Email: e.target.value })}
+              />
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setCreateStoreOpen(false)} sx={{ color: '#6B7280' }}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleCreateStore}
+            sx={{ bgcolor: '#2563EB', fontWeight: 700, borderRadius: 2, '&:hover': { bgcolor: '#1D4ED8' } }}
+          >
+            Create Branch
           </Button>
         </DialogActions>
       </Dialog>

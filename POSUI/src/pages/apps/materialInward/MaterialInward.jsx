@@ -99,9 +99,36 @@ export default function MaterialInward() {
 
   // Docket detail view dialog state
   const [viewDocket, setViewDocket] = useState(null);
+  const [docketViewTab, setDocketViewTab] = useState(0); // 0: SKU Summary, 1: Unit QR Labels
+  const [docketUnitFilter, setDocketUnitFilter] = useState('all');
+
+  // Filter state for Step 3 unit barcodes preview
+  const [selectedUnitFilter, setSelectedUnitFilter] = useState('all');
 
   // Toast notification
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
+
+  // Memoized Unit Barcodes for Step 3
+  const allGeneratedUnits = useMemo(() => {
+    if (!generatedInward || !Array.isArray(generatedInward.Items)) return [];
+    return generatedInward.Items.flatMap((itm) => itm.UnitBarcodes || []);
+  }, [generatedInward]);
+
+  const filteredGeneratedUnits = useMemo(() => {
+    if (selectedUnitFilter === 'all') return allGeneratedUnits;
+    return allGeneratedUnits.filter((u) => u.ProductId === selectedUnitFilter);
+  }, [allGeneratedUnits, selectedUnitFilter]);
+
+  // Memoized Unit Barcodes for Docket View Dialog
+  const allDocketUnits = useMemo(() => {
+    if (!viewDocket || !Array.isArray(viewDocket.Items)) return [];
+    return viewDocket.Items.flatMap((itm) => itm.UnitBarcodes || []);
+  }, [viewDocket]);
+
+  const filteredDocketUnits = useMemo(() => {
+    if (docketUnitFilter === 'all') return allDocketUnits;
+    return allDocketUnits.filter((u) => u.ProductId === docketUnitFilter);
+  }, [allDocketUnits, docketUnitFilter]);
 
   // Load live data from PostgreSQL API
   const loadData = async () => {
@@ -131,15 +158,13 @@ export default function MaterialInward() {
     loadData();
   }, []);
 
-  // Filter out POs that have already been received or cancelled
+  // Only POs with status 'Sent' that have not already been inwarded should be let in
   const availablePurchaseOrders = useMemo(() => {
     return purchaseOrders.filter((po) => {
       const status = (po.Status || '').trim().toLowerCase();
-      // Do not show POs that are received
-      if (status === 'received') return false;
-      // Do not show POs that are cancelled
-      if (status === 'cancelled') return false;
-      // Also filter out any PO already fulfilled/received in material inward records
+      // Only 'Sent' purchase orders can be inwarded
+      if (status !== 'sent') return false;
+      // Exclude if already inwarded / received in material inward records
       const alreadyInwarded = inwards.some(
         (inw) => inw.PurchaseOrderId && (inw.PurchaseOrderId === po.Id || inw.PurchaseOrderId === po.DocumentNumber)
       );
@@ -158,8 +183,22 @@ export default function MaterialInward() {
 
   // When PO is selected in wizard
   const handlePoSelect = (poId) => {
-    setSelectedPoId(poId);
     const po = purchaseOrders.find((p) => p.Id === poId);
+    if (!po) return;
+
+    const status = (po.Status || '').trim().toLowerCase();
+    if (status !== 'sent') {
+      setToast({
+        open: true,
+        message: `PO ${po.DocumentNumber} cannot be selected. Only orders with status "Sent" are allowed (status is "${po.Status || 'Unknown'}").`,
+        severity: 'error'
+      });
+      setSelectedPoId('');
+      setInwardItems([]);
+      return;
+    }
+
+    setSelectedPoId(poId);
     if (po && po.Items) {
       setSelectedVendorId(po.VendorId);
       setInwardItems(
@@ -218,15 +257,28 @@ export default function MaterialInward() {
   // Wizard Navigation
   const handleNext = async () => {
     if (activeStep === 0) {
-      if (mode === 'with_po' && !selectedPoId) {
-        setToast({
-          open: true,
-          message: availablePurchaseOrders.length === 0
-            ? 'No pending purchase orders available to receive. Switch to Direct Inward or create a PO.'
-            : 'Please select a Purchase Order',
-          severity: 'warning'
-        });
-        return;
+      if (mode === 'with_po') {
+        if (!selectedPoId) {
+          setToast({
+            open: true,
+            message: availablePurchaseOrders.length === 0
+              ? 'No purchase orders with status "Sent" are available. Only "Sent" orders can be received.'
+              : 'Please select a Purchase Order',
+            severity: 'warning'
+          });
+          return;
+        }
+
+        const po = purchaseOrders.find((p) => p.Id === selectedPoId);
+        const status = (po?.Status || '').trim().toLowerCase();
+        if (!po || status !== 'sent') {
+          setToast({
+            open: true,
+            message: `Selected PO has status "${po?.Status || 'Unknown'}". Only orders with status "Sent" can be inwarded (cancelled & received orders are not allowed).`,
+            severity: 'error'
+          });
+          return;
+        }
       }
       if (mode === 'without_po' && !selectedVendorId) {
         setToast({ open: true, message: 'Please select a Supplier / Vendor', severity: 'warning' });
@@ -280,6 +332,7 @@ export default function MaterialInward() {
     setSelectedVendorId('');
     setInwardItems([]);
     setGeneratedInward(null);
+    setSelectedUnitFilter('all');
   };
 
   // Filter history
@@ -670,11 +723,11 @@ export default function MaterialInward() {
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 1 }}>
                         <SuccessIcon sx={{ color: '#10B981', fontSize: 24 }} />
                         <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#0F172A' }}>
-                          No Pending Purchase Orders Available
+                          No 'Sent' Purchase Orders Available
                         </Typography>
                       </Box>
                       <Typography variant="body2" sx={{ color: '#64748B', maxWidth: 480, mx: 'auto', mb: 2 }}>
-                        All approved purchase orders have already been received. Received POs are automatically hidden from inward selection. You can receive stock directly without a PO or create a new PO first.
+                        Only purchase orders with status <strong>Sent</strong> can be received. All cancelled, received, and partial orders are excluded. You can receive stock directly without a PO or create a new PO first.
                       </Typography>
                       <Button
                         variant="outlined"
@@ -713,7 +766,7 @@ export default function MaterialInward() {
                         ))}
                       </Select>
                       <Typography variant="caption" sx={{ color: '#64748B', mt: 0.8, display: 'block' }}>
-                        Showing {availablePurchaseOrders.length} pending purchase order{availablePurchaseOrders.length > 1 ? 's' : ''} (received POs are hidden).
+                        Showing {availablePurchaseOrders.length} purchase order{availablePurchaseOrders.length > 1 ? 's' : ''} with status 'Sent'. Only 'Sent' orders can be inwarded (cancelled & received POs are hidden).
                       </Typography>
                     </FormControl>
                   )
@@ -919,110 +972,200 @@ export default function MaterialInward() {
               </Box>
             )}
 
-            {/* STEP 3: Printable Barcode Labels */}
+            {/* STEP 3: Printable Unique Unit Barcode & QR Labels */}
             {activeStep === 2 && generatedInward && (
-              <Box sx={{ maxWidth: 960, mx: 'auto' }}>
+              <Box sx={{ maxWidth: 1040, mx: 'auto' }}>
                 <Box sx={{ p: 3, bgcolor: '#ECFDF5', borderRadius: 2.5, border: '1px solid #A7F3D0', mb: 3 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                      <SuccessIcon sx={{ color: '#059669', fontSize: 40 }} />
+                      <SuccessIcon sx={{ color: '#059669', fontSize: 44 }} />
                       <Box>
                         <Typography variant="h5" sx={{ fontWeight: 800, color: '#065F46' }}>
                           Inward Docket Created Successfully!
                         </Typography>
                         <Typography variant="body2" sx={{ color: '#047857' }}>
-                          Docket ID: <strong>{generatedInward.Id}</strong> &mdash; Inventory stock automatically incremented in PostgreSQL.
+                          Docket ID: <strong>{generatedInward.Id}</strong> &mdash; Generated <strong>{allGeneratedUnits.length} unique packet QR codes & barcodes</strong> across {generatedInward.Items?.length || 0} SKU(s).
                         </Typography>
                       </Box>
                     </Box>
-                    <Button
-                      variant="contained"
-                      color="primary"
-                      startIcon={<PrintIcon />}
-                      onClick={() => printBarcodeLabels(generatedInward.Items)}
-                      sx={{
-                        bgcolor: '#059669',
-                        '&:hover': { bgcolor: '#047857' },
-                        fontWeight: 700,
-                        px: 3,
-                        borderRadius: 2
-                      }}
-                    >
-                      Print 80mm Labels
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                      <Button
+                        variant="contained"
+                        startIcon={<PrintIcon />}
+                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'sheet' })}
+                        sx={{
+                          bgcolor: '#059669',
+                          '&:hover': { bgcolor: '#047857' },
+                          fontWeight: 700,
+                          px: 2.5,
+                          borderRadius: 2,
+                          boxShadow: '0 4px 12px rgba(5, 150, 105, 0.3)'
+                        }}
+                      >
+                        Print All ({allGeneratedUnits.length}) in One PDF
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        startIcon={<PrintIcon />}
+                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal' })}
+                        sx={{
+                          borderColor: '#059669',
+                          color: '#059669',
+                          fontWeight: 700,
+                          borderRadius: 2,
+                          '&:hover': { bgcolor: '#F0FDF4', borderColor: '#047857' }
+                        }}
+                      >
+                        Thermal Roll
+                      </Button>
+                    </Box>
                   </Box>
                 </Box>
 
-                <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#0F172A', mb: 2 }}>
-                  Generated Batch Barcode Stickers ({generatedInward.Items?.length || 0} SKUs)
-                </Typography>
+                {/* Filter Chips if multiple SKUs */}
+                {generatedInward.Items?.length > 1 && (
+                  <Box sx={{ display: 'flex', gap: 1, mb: 2.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, color: '#64748B', mr: 0.5 }}>
+                      FILTER PACKETS:
+                    </Typography>
+                    <Chip
+                      label={`All Packets (${allGeneratedUnits.length})`}
+                      onClick={() => setSelectedUnitFilter('all')}
+                      color={selectedUnitFilter === 'all' ? 'primary' : 'default'}
+                      variant={selectedUnitFilter === 'all' ? 'filled' : 'outlined'}
+                      sx={{ fontWeight: 700, cursor: 'pointer' }}
+                    />
+                    {generatedInward.Items.map((itm) => (
+                      <Chip
+                        key={itm.ProductId}
+                        label={`${itm.ProductName} (${itm.UnitBarcodes?.length || itm.ReceivedQty})`}
+                        onClick={() => setSelectedUnitFilter(itm.ProductId)}
+                        color={selectedUnitFilter === itm.ProductId ? 'primary' : 'default'}
+                        variant={selectedUnitFilter === itm.ProductId ? 'filled' : 'outlined'}
+                        sx={{ fontWeight: 700, cursor: 'pointer' }}
+                      />
+                    ))}
+                  </Box>
+                )}
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#0F172A' }}>
+                    Generated Unique Packet Barcode Stickers ({filteredGeneratedUnits.length} of {allGeneratedUnits.length} Units)
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 600 }}>
+                    Each packet has an individual unique serial code & scannable vector QR code
+                  </Typography>
+                </Box>
 
                 {/* Barcode Labels Preview Grid */}
                 <Grid container spacing={2.5}>
-                  {(generatedInward.Items || []).map((item, idx) => (
-                    <Grid item xs={12} sm={6} md={4} key={idx}>
+                  {filteredGeneratedUnits.map((unit, idx) => (
+                    <Grid item xs={12} sm={6} md={4} key={unit.Serial || idx}>
                       <Card sx={{
                         p: 2,
-                        border: '2px dashed #94A3B8',
+                        border: '1.5px solid #CBD5E1',
                         borderRadius: 2.5,
-                        textAlign: 'center',
                         bgcolor: '#FFFFFF',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.04)'
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.04)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        transition: 'all 0.2s ease',
+                        '&:hover': { borderColor: '#10B981', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.15)' }
                       }}>
-                        <Typography variant="overline" sx={{ fontWeight: 900, letterSpacing: 1.5, color: '#0F172A', display: 'block' }}>
-                          POS SUPERMARKET
-                        </Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 800, color: '#0F172A', lineHeight: 1.2 }}>
-                          {item.ProductName}
-                        </Typography>
-                        <Typography variant="caption" sx={{ color: '#64748B', display: 'block', mb: 1 }}>
-                          Received: {item.ReceivedQty} {item.Unit || 'PCS'}
-                        </Typography>
+                        <Box>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, borderBottom: '1px solid #F1F5F9', pb: 0.8 }}>
+                            <Typography variant="overline" sx={{ fontWeight: 900, letterSpacing: 1, color: '#475569', fontSize: 10 }}>
+                              POS SUPERMARKET
+                            </Typography>
+                            <Chip
+                              label={unit.TotalUnits ? `Packet ${unit.UnitIndex} of ${unit.TotalUnits}` : 'Unit 1'}
+                              size="small"
+                              sx={{ bgcolor: '#0F172A', color: '#FFF', fontWeight: 800, fontSize: 10, height: 20 }}
+                            />
+                          </Box>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0F172A', lineHeight: 1.25, mb: 1, minHeight: 34 }}>
+                            {unit.ProductName}
+                          </Typography>
 
-                        {/* QR Code Scannable */}
-                        <Box sx={{ my: 1, display: 'flex', justifyContent: 'center' }}>
-                          <QRCodeSVG
-                            value={item.Barcode || item.ProductId}
-                            size={100}
-                            level="M"
-                            includeMargin
-                          />
+                          {/* QR Code Scannable */}
+                          <Box sx={{ my: 1, display: 'flex', justifyContent: 'center', p: 1, bgcolor: '#F8FAFC', borderRadius: 2 }}>
+                            <QRCodeSVG
+                              value={unit.QrPayload || unit.Serial}
+                              size={110}
+                              level="M"
+                              includeMargin
+                            />
+                          </Box>
+
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 800, letterSpacing: 1.5, color: '#0F172A', textAlign: 'center', mt: 0.5 }}>
+                            {unit.Serial}
+                          </Typography>
                         </Box>
 
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 800, letterSpacing: 2, color: '#0F172A' }}>
-                          {item.Barcode}
-                        </Typography>
-
-                        <Divider sx={{ my: 1 }} />
-
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#475569', fontWeight: 600 }}>
-                          <span>Exp: {item.ExpiryDate}</span>
-                          <span>MRP: ₹{(Number(item.Rate || 0) * 1.3).toFixed(2)}</span>
+                        <Box sx={{ mt: 1.5, pt: 1, borderTop: '1px dashed #CBD5E1' }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#475569', fontWeight: 600, mb: 1 }}>
+                            <span>Exp: <strong style={{ color: '#D97706' }}>{unit.ExpiryDate || 'N/A'}</strong></span>
+                            <span>MRP: <strong style={{ color: '#0F172A' }}>₹{unit.Mrp ? Number(unit.Mrp).toFixed(2) : (Number(unit.Rate || 0) * 1.3).toFixed(2)}</strong></span>
+                          </Box>
+                          <Button
+                            fullWidth
+                            size="small"
+                            variant="outlined"
+                            startIcon={<PrintIcon sx={{ fontSize: 14 }} />}
+                            onClick={() => printBarcodeLabels([unit], { layout: 'sheet' })}
+                            sx={{
+                              textTransform: 'none',
+                              fontSize: 11,
+                              py: 0.4,
+                              borderRadius: 1.5,
+                              borderColor: '#E2E8F0',
+                              color: '#475569',
+                              '&:hover': { borderColor: '#10B981', color: '#10B981', bgcolor: '#F0FDF4' }
+                            }}
+                          >
+                            Print Single Sticker
+                          </Button>
                         </Box>
                       </Card>
                     </Grid>
                   ))}
                 </Grid>
 
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 4 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 4, flexWrap: 'wrap', gap: 2 }}>
                   <Button
                     variant="outlined"
                     onClick={() => {
                       setCurrentTab(1);
                       handleReset();
                     }}
-                    sx={{ borderRadius: 2 }}
+                    sx={{ borderRadius: 2, fontWeight: 600 }}
                   >
                     View in Dockets Registry
                   </Button>
-                  <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleReset}
-                    sx={{ borderRadius: 2, fontWeight: 700 }}
-                  >
-                    Process Another Inward
-                  </Button>
+                  <Box sx={{ display: 'flex', gap: 1.5 }}>
+                    <Button
+                      variant="contained"
+                      startIcon={<PrintIcon />}
+                      onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'sheet' })}
+                      sx={{
+                        borderRadius: 2,
+                        fontWeight: 700,
+                        bgcolor: '#10B981',
+                        '&:hover': { bgcolor: '#059669' }
+                      }}
+                    >
+                      Print All {allGeneratedUnits.length} Labels (PDF)
+                    </Button>
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      onClick={handleReset}
+                      sx={{ borderRadius: 2, fontWeight: 700 }}
+                    >
+                      Process Another Inward
+                    </Button>
+                  </Box>
                 </Box>
               </Box>
             )}
@@ -1033,7 +1176,11 @@ export default function MaterialInward() {
       {/* View Inward Docket Dialog */}
       <Dialog
         open={Boolean(viewDocket)}
-        onClose={() => setViewDocket(null)}
+        onClose={() => {
+          setViewDocket(null);
+          setDocketViewTab(0);
+          setDocketUnitFilter('all');
+        }}
         maxWidth="md"
         fullWidth
         PaperProps={{ sx: { borderRadius: 3, p: 1 } }}
@@ -1054,47 +1201,116 @@ export default function MaterialInward() {
         <DialogContent dividers>
           {viewDocket && (
             <Box>
-              <Box sx={{ display: 'flex', gap: 2, mb: 2.5, flexWrap: 'wrap' }}>
-                <Chip
-                  label={viewDocket.PurchaseOrderId ? `Against PO: ${viewDocket.PurchaseOrderId}` : 'Direct Inward'}
-                  size="small"
-                  sx={{ bgcolor: viewDocket.PurchaseOrderId ? '#EFF6FF' : '#F1F5F9', color: viewDocket.PurchaseOrderId ? '#2563EB' : '#475569', fontWeight: 700 }}
-                />
-                <Chip
-                  label={`Total Items: ${(viewDocket.Items || []).length} SKUs`}
-                  size="small"
-                  sx={{ bgcolor: '#ECFDF5', color: '#059669', fontWeight: 700 }}
-                />
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2.5, flexWrap: 'wrap', gap: 1.5 }}>
+                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                  <Chip
+                    label={viewDocket.PurchaseOrderId ? `Against PO: ${viewDocket.PurchaseOrderId}` : 'Direct Inward'}
+                    size="small"
+                    sx={{ bgcolor: viewDocket.PurchaseOrderId ? '#EFF6FF' : '#F1F5F9', color: viewDocket.PurchaseOrderId ? '#2563EB' : '#475569', fontWeight: 700 }}
+                  />
+                  <Chip
+                    label={`SKUs: ${(viewDocket.Items || []).length}`}
+                    size="small"
+                    sx={{ bgcolor: '#ECFDF5', color: '#059669', fontWeight: 700 }}
+                  />
+                  <Chip
+                    label={`Total Packets: ${allDocketUnits.length}`}
+                    size="small"
+                    sx={{ bgcolor: '#F0FDF4', color: '#16A34A', fontWeight: 700, border: '1px solid #BBF7D0' }}
+                  />
+                </Box>
+                <Tabs
+                  value={docketViewTab}
+                  onChange={(_, val) => setDocketViewTab(val)}
+                  sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5, textTransform: 'none', fontWeight: 700, fontSize: 13 } }}
+                >
+                  <Tab label="Consignment SKUs" />
+                  <Tab label={`Unit QR Stickers (${allDocketUnits.length})`} />
+                </Tabs>
               </Box>
 
-              <TableContainer sx={{ border: '1px solid #E2E8F0', borderRadius: 2 }}>
-                <Table size="small">
-                  <TableHead sx={{ bgcolor: '#F8FAFC' }}>
-                    <TableRow>
-                      <TableCell sx={{ fontWeight: 700 }}>Barcode / SKU</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Product Name</TableCell>
-                      <TableCell align="center" sx={{ fontWeight: 700 }}>Received Qty</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700 }}>Rate (₹)</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700 }}>Amount (₹)</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Batch Expiry</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {(viewDocket.Items || []).map((itm, idx) => (
-                      <TableRow key={idx} hover>
-                        <TableCell sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
-                          {itm.Barcode || itm.ProductId}
-                        </TableCell>
-                        <TableCell sx={{ fontWeight: 600 }}>{itm.ProductName}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 700 }}>{itm.ReceivedQty} {itm.Unit || 'PCS'}</TableCell>
-                        <TableCell align="right">₹{Number(itm.Rate || 0).toFixed(2)}</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700 }}>₹{(Number(itm.Rate || 0) * Number(itm.ReceivedQty || 0)).toFixed(2)}</TableCell>
-                        <TableCell sx={{ color: '#D97706', fontWeight: 600 }}>{itm.ExpiryDate || 'N/A'}</TableCell>
+              {docketViewTab === 0 ? (
+                <TableContainer sx={{ border: '1px solid #E2E8F0', borderRadius: 2 }}>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: '#F8FAFC' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 700 }}>Barcode / SKU</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Product Name</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 700 }}>Received Qty</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700 }}>Rate (₹)</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700 }}>Amount (₹)</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }}>Batch Expiry</TableCell>
                       </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(viewDocket.Items || []).map((itm, idx) => (
+                        <TableRow key={idx} hover>
+                          <TableCell sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                            {itm.Barcode || itm.ProductId}
+                          </TableCell>
+                          <TableCell sx={{ fontWeight: 600 }}>{itm.ProductName}</TableCell>
+                          <TableCell align="center" sx={{ fontWeight: 700 }}>{itm.ReceivedQty} {itm.Unit || 'PCS'}</TableCell>
+                          <TableCell align="right">₹{Number(itm.Rate || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 700 }}>₹{(Number(itm.Rate || 0) * Number(itm.ReceivedQty || 0)).toFixed(2)}</TableCell>
+                          <TableCell sx={{ color: '#D97706', fontWeight: 600 }}>{itm.ExpiryDate || 'N/A'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              ) : (
+                <Box>
+                  {/* Filter chips if multiple SKUs */}
+                  {viewDocket.Items?.length > 1 && (
+                    <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+                      <Chip
+                        label={`All Packets (${allDocketUnits.length})`}
+                        size="small"
+                        onClick={() => setDocketUnitFilter('all')}
+                        color={docketUnitFilter === 'all' ? 'primary' : 'default'}
+                        variant={docketUnitFilter === 'all' ? 'filled' : 'outlined'}
+                        sx={{ fontWeight: 700, cursor: 'pointer' }}
+                      />
+                      {viewDocket.Items.map((itm) => (
+                        <Chip
+                          key={itm.ProductId}
+                          size="small"
+                          label={`${itm.ProductName} (${itm.UnitBarcodes?.length || itm.ReceivedQty})`}
+                          onClick={() => setDocketUnitFilter(itm.ProductId)}
+                          color={docketUnitFilter === itm.ProductId ? 'primary' : 'default'}
+                          variant={docketUnitFilter === itm.ProductId ? 'filled' : 'outlined'}
+                          sx={{ fontWeight: 700, cursor: 'pointer' }}
+                        />
+                      ))}
+                    </Box>
+                  )}
+
+                  <Grid container spacing={2}>
+                    {filteredDocketUnits.map((unit, idx) => (
+                      <Grid item xs={12} sm={6} md={4} key={unit.Serial || idx}>
+                        <Card sx={{ p: 1.5, border: '1px solid #E2E8F0', borderRadius: 2, textAlign: 'center' }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                            <Typography variant="caption" sx={{ fontWeight: 800, color: '#64748B' }}>POS SUPERMARKET</Typography>
+                            <Chip label={`Pkt ${unit.UnitIndex}/${unit.TotalUnits}`} size="small" sx={{ height: 18, fontSize: 9.5, fontWeight: 800 }} />
+                          </Box>
+                          <Typography variant="body2" sx={{ fontWeight: 700, noWrap: true, mb: 1 }}>{unit.ProductName}</Typography>
+                          <Box sx={{ display: 'flex', justifyContent: 'center', my: 1 }}>
+                            <QRCodeSVG value={unit.QrPayload || unit.Serial} size={90} level="M" />
+                          </Box>
+                          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 800, display: 'block' }}>
+                            {unit.Serial}
+                          </Typography>
+                          <Divider sx={{ my: 1 }} />
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: '#475569' }}>
+                            <span>Exp: {unit.ExpiryDate}</span>
+                            <span>MRP: ₹{unit.Mrp ? Number(unit.Mrp).toFixed(2) : (Number(unit.Rate || 0) * 1.3).toFixed(2)}</span>
+                          </Box>
+                        </Card>
+                      </Grid>
                     ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                  </Grid>
+                </Box>
+              )}
             </Box>
           )}
         </DialogContent>
@@ -1103,15 +1319,25 @@ export default function MaterialInward() {
             Close
           </Button>
           <Button
+            variant="outlined"
+            startIcon={<PrintIcon />}
+            onClick={() => {
+              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'thermal' });
+            }}
+            sx={{ fontWeight: 700, borderRadius: 2 }}
+          >
+            Thermal Roll
+          </Button>
+          <Button
             variant="contained"
             color="primary"
             startIcon={<PrintIcon />}
             onClick={() => {
-              if (viewDocket) printBarcodeLabels(viewDocket.Items);
+              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'sheet' });
             }}
-            sx={{ fontWeight: 700, px: 3, borderRadius: 2 }}
+            sx={{ fontWeight: 700, px: 3, borderRadius: 2, bgcolor: '#10B981', '&:hover': { bgcolor: '#059669' } }}
           >
-            Print All Labels
+            Print All ({allDocketUnits.length}) in One PDF
           </Button>
         </DialogActions>
       </Dialog>

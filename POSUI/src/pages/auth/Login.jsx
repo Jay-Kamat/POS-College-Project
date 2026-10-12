@@ -40,7 +40,8 @@ export default function Login() {
       role: role
     }));
     if (role === 'Cashier') navigate('/apps/bucket');
-    else if (role === 'Inventory Manager') navigate('/apps/materialInward');
+    else if (role === 'Inventory' || role === 'Inventory Manager') navigate('/apps/materialInward');
+    else if (role === 'Store Manager') navigate('/apps/settings');
     else navigate('/dashboard');
   };
 
@@ -141,10 +142,11 @@ export default function Login() {
           <Typography variant="caption" sx={{ fontWeight: 600, color: '#4B5563', display: 'block', mb: 1, textAlign: 'center' }}>
             Instant Simulator Logins:
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center', flexWrap: 'wrap' }}>
             <Chip label="Admin" clickable onClick={() => handleQuickDemoLogin('Admin')} color="primary" size="small" />
+            <Chip label="Store Manager" clickable onClick={() => handleQuickDemoLogin('Store Manager')} sx={{ bgcolor: '#DCFCE7', color: '#15803D', fontWeight: 600 }} size="small" />
             <Chip label="Cashier" clickable onClick={() => handleQuickDemoLogin('Cashier')} color="success" size="small" />
-            <Chip label="Inv Manager" clickable onClick={() => handleQuickDemoLogin('Inventory Manager')} color="warning" size="small" />
+            <Chip label="Inventory" clickable onClick={() => handleQuickDemoLogin('Inventory')} color="warning" size="small" />
           </Box>
         </Paper>
       </Box>

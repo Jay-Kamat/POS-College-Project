@@ -201,6 +201,7 @@ export default function UserManagement() {
 
     if (!matchesSearch) return false;
     if (roleFilter === 'ADMIN') return (u.Role || '').toLowerCase() === 'admin';
+    if (roleFilter === 'STORE_MANAGER') return (u.Role || '').toLowerCase().includes('manager');
     if (roleFilter === 'CASHIER') return (u.Role || '').toLowerCase() === 'cashier';
     if (roleFilter === 'INVENTORY') return (u.Role || '').toLowerCase().includes('inventory');
     if (roleFilter === 'ACTIVE') return (u.Status || '').toLowerCase() === 'active';
@@ -210,6 +211,7 @@ export default function UserManagement() {
   const getRoleBadgeColor = (role) => {
     const r = (role || '').toLowerCase();
     if (r === 'admin') return { bg: '#EEF2FF', text: '#3B5BDB', border: '#C5D2FC' };
+    if (r.includes('manager')) return { bg: '#F0FDF4', text: '#16A34A', border: '#86EFAC' };
     if (r === 'cashier') return { bg: '#EBFBEE', text: '#2F9E44', border: '#B2F2BB' };
     return { bg: '#FFF9DB', text: '#D9480F', border: '#FFE066' };
   };
@@ -438,6 +440,7 @@ export default function UserManagement() {
                 {[
                   { label: 'All Staff', key: 'ALL' },
                   { label: 'Admins', key: 'ADMIN' },
+                  { label: 'Store Managers', key: 'STORE_MANAGER' },
                   { label: 'Cashiers', key: 'CASHIER' },
                   { label: 'Inventory', key: 'INVENTORY' },
                   { label: 'Active Only', key: 'ACTIVE' }
@@ -650,7 +653,7 @@ export default function UserManagement() {
               <Table size="small">
                 <TableHead>
                   <TableRow sx={{ bgcolor: '#F8FAFC' }}>
-                    <TableCell sx={{ fontWeight: 800, color: '#334155', width: '30%', py: 1.5 }}>
+                    <TableCell sx={{ fontWeight: 800, color: '#334155', width: '28%', py: 1.5 }}>
                       System Module / Capability
                     </TableCell>
                     <TableCell
@@ -658,6 +661,12 @@ export default function UserManagement() {
                       sx={{ bgcolor: '#EEF2FF', color: '#4F46E5', fontWeight: 800, borderLeft: '1px solid #E2E8F0' }}
                     >
                       Admin (Full Governance)
+                    </TableCell>
+                    <TableCell
+                      align="center"
+                      sx={{ bgcolor: '#F0FDF4', color: '#16A34A', fontWeight: 800, borderLeft: '1px solid #E2E8F0' }}
+                    >
+                      Store Manager (Edit Profile & Ops)
                     </TableCell>
                     <TableCell
                       align="center"
@@ -669,12 +678,13 @@ export default function UserManagement() {
                       align="center"
                       sx={{ bgcolor: '#FFFBEB', color: '#D97706', fontWeight: 800, borderLeft: '1px solid #E2E8F0' }}
                     >
-                      Inventory Manager (Stock & POs)
+                      Inventory (Stock & Inward)
                     </TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {matrix.map((row, idx) => {
+                    const smPerm = row.storeManager || { view: true, create: true, edit: true, delete: false, export: true };
                     const cashierPerm = row.cashier || {};
                     const invPerm = row.inventory || {};
                     return (
@@ -691,6 +701,25 @@ export default function UserManagement() {
                               Full Control
                             </Typography>
                           </Box>
+                        </TableCell>
+
+                        {/* Store Manager Column */}
+                        <TableCell align="center" sx={{ borderLeft: '1px solid #E2E8F0', bgcolor: '#FDFEFE' }}>
+                          <Stack direction="row" spacing={1} justifyContent="center" alignItems="center">
+                            <Tooltip title="Toggle Store Manager View / Access">
+                              <Box sx={{ display: 'inline-flex', alignItems: 'center' }}>
+                                <Checkbox
+                                  checked={smPerm.view !== false}
+                                  onChange={() => handleTogglePermission(idx, 'storeManager', 'view')}
+                                  color="success"
+                                  size="small"
+                                />
+                                <Typography variant="caption" sx={{ color: smPerm.view !== false ? '#16A34A' : '#94A3B8', fontWeight: 600 }}>
+                                  {smPerm.view !== false ? 'Enabled' : 'Disabled'}
+                                </Typography>
+                              </Box>
+                            </Tooltip>
+                          </Stack>
                         </TableCell>
 
                         {/* Cashier Column */}
@@ -712,10 +741,10 @@ export default function UserManagement() {
                           </Stack>
                         </TableCell>
 
-                        {/* Inventory Manager Column */}
+                        {/* Inventory Column */}
                         <TableCell align="center" sx={{ borderLeft: '1px solid #E2E8F0' }}>
                           <Stack direction="row" spacing={1} justifyContent="center" alignItems="center">
-                            <Tooltip title="Toggle Inventory Manager View / Access">
+                            <Tooltip title="Toggle Inventory View / Access">
                               <Box sx={{ display: 'inline-flex', alignItems: 'center' }}>
                                 <Checkbox
                                   checked={!!invPerm.view}
@@ -768,17 +797,18 @@ export default function UserManagement() {
           <FormControl fullWidth margin="normal">
             <InputLabel>Assigned Role *</InputLabel>
             <Select value={newUserRole} label="Assigned Role *" onChange={(e) => setNewUserRole(e.target.value)}>
-              <MenuItem value="Admin">Administrator (Full Control)</MenuItem>
-              <MenuItem value="Cashier">Front-Counter Cashier (POS & Billing)</MenuItem>
-              <MenuItem value="Inventory Manager">Inventory Officer (Stock & POs)</MenuItem>
+              <MenuItem value="Admin">Admin (Full Access & Switch Outlets)</MenuItem>
+              <MenuItem value="Store Manager">Store Manager (Edit Store Profile & Operations)</MenuItem>
+              <MenuItem value="Cashier">Cashier (Front-Counter POS & Billing)</MenuItem>
+              <MenuItem value="Inventory">Inventory (Stock, Inward & POs)</MenuItem>
             </Select>
           </FormControl>
           <FormControl fullWidth margin="normal">
             <InputLabel>Branch Store Assignment *</InputLabel>
             <Select value={newUserStore} label="Branch Store Assignment *" onChange={(e) => setNewUserStore(e.target.value)}>
-              <MenuItem value="DailyMart Express (Mumbai)">DailyMart Express (Mumbai - Flagship)</MenuItem>
-              <MenuItem value="DailyMart Superstore (Pune)">DailyMart Superstore (Pune)</MenuItem>
-              <MenuItem value="DailyMart Central (Nagpur)">DailyMart Central (Nagpur)</MenuItem>
+              <MenuItem value="DailyMart Express (Mumbai)">DailyMart Express (Mumbai - Central)</MenuItem>
+              <MenuItem value="DailyMart Supercenter (Pune)">DailyMart Supercenter (Pune - West)</MenuItem>
+              <MenuItem value="DailyMart Metro (Bangalore)">DailyMart Metro (Bangalore - Urban)</MenuItem>
             </Select>
           </FormControl>
         </DialogContent>
@@ -816,9 +846,10 @@ export default function UserManagement() {
           <FormControl fullWidth margin="normal">
             <InputLabel>Assigned Role</InputLabel>
             <Select value={editRole} label="Assigned Role" onChange={(e) => setEditRole(e.target.value)}>
-              <MenuItem value="Admin">Administrator</MenuItem>
+              <MenuItem value="Admin">Admin</MenuItem>
+              <MenuItem value="Store Manager">Store Manager</MenuItem>
               <MenuItem value="Cashier">Cashier</MenuItem>
-              <MenuItem value="Inventory Manager">Inventory Manager</MenuItem>
+              <MenuItem value="Inventory">Inventory</MenuItem>
             </Select>
           </FormControl>
           <FormControl fullWidth margin="normal">

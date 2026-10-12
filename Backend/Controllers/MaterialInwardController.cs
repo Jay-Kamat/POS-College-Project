@@ -43,7 +43,18 @@ public class MaterialInwardController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateMaterialInward([FromBody] JsonElement body)
     {
-        var created = await _db.CreateMaterialInwardAsync(body);
-        return StatusCode(201, created);
+        try
+        {
+            var created = await _db.CreateMaterialInwardAsync(body);
+            return StatusCode(201, created);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { status = "error", message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { status = "error", message = ex.Message });
+        }
     }
 }

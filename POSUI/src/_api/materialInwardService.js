@@ -24,6 +24,50 @@ const INITIAL_INWARDS = [
   }
 ];
 
+// Helper to generate unique serial barcode & QR payload for every individual unit/packet
+export function generateUnitBarcodesForItem(item, inwardId = '', itemIdx = 0) {
+  const baseBarcode = item.Barcode || item.ProductNumber || `200100${String(Date.now()).slice(-4)}${String(itemIdx + 1).padStart(2, '0')}`;
+  const qty = Math.max(1, Math.round(Number(item.ReceivedQty || item.Quantity || 1)));
+  const padLen = qty >= 100 ? 3 : 2;
+  const unitBarcodes = [];
+
+  for (let i = 1; i <= qty; i++) {
+    const serialSuffix = String(i).padStart(padLen, '0');
+    const unitSerial = `${baseBarcode}-${serialSuffix}`;
+    const qrPayload = JSON.stringify({
+      barcode: baseBarcode,
+      serial: unitSerial,
+      id: item.ProductId,
+      name: item.ProductName,
+      unit: `${i}/${qty}`,
+      exp: item.ExpiryDate || '',
+      mrp: Number((Number(item.Rate || item.Cost || 0) * 1.3).toFixed(2)),
+      inw: inwardId || `inw_${Date.now()}`
+    });
+
+    unitBarcodes.push({
+      UnitIndex: i,
+      TotalUnits: qty,
+      Serial: unitSerial,
+      Barcode: baseBarcode,
+      QrPayload: qrPayload,
+      ProductName: item.ProductName,
+      ProductId: item.ProductId,
+      ExpiryDate: item.ExpiryDate || '',
+      Rate: Number(item.Rate || item.Cost || 0),
+      Mrp: Number((Number(item.Rate || item.Cost || 0) * 1.3).toFixed(2)),
+      Unit: item.Unit || 'PCS',
+      InwardId: inwardId
+    });
+  }
+
+  return {
+    ...item,
+    Barcode: baseBarcode,
+    UnitBarcodes: unitBarcodes
+  };
+}
+
 const normalizeInward = (inward) => {
   if (!inward) return inward;
   let items = inward.Items;
@@ -34,9 +78,18 @@ const normalizeInward = (inward) => {
       items = [];
     }
   }
+  const itemsArr = Array.isArray(items) ? items : [];
+
+  const normalizedItems = itemsArr.map((item, idx) => {
+    if (Array.isArray(item.UnitBarcodes) && item.UnitBarcodes.length > 0) {
+      return item;
+    }
+    return generateUnitBarcodesForItem(item, inward.Id, idx);
+  });
+
   return {
     ...inward,
-    Items: Array.isArray(items) ? items : []
+    Items: normalizedItems
   };
 };
 
@@ -99,18 +152,15 @@ export const materialInwardService = {
   },
 
   createInward: async (inwardData) => {
-    // Ensure all items have barcodes
-    const itemsWithBarcodes = (inwardData.Items || []).map((item, idx) => {
-      const generatedBarcode = item.Barcode || `200100${String(Date.now()).slice(-4)}${String(idx + 1).padStart(2, '0')}`;
-      return {
-        ...item,
-        Barcode: generatedBarcode
-      };
-    });
+    const tempInwardId = `inw_${Date.now()}`;
+    // Ensure all items have base barcodes AND unit-level barcodes
+    const itemsWithUnits = (inwardData.Items || []).map((item, idx) =>
+      generateUnitBarcodesForItem(item, tempInwardId, idx)
+    );
 
     const payload = {
       ...inwardData,
-      Items: itemsWithBarcodes
+      Items: itemsWithUnits
     };
 
     try {
@@ -118,7 +168,7 @@ export const materialInwardService = {
       const normalized = normalizeInward({
         ...payload,
         ...created,
-        Items: created.Items ? (typeof created.Items === 'string' ? JSON.parse(created.Items) : created.Items) : itemsWithBarcodes
+        Items: created.Items ? (typeof created.Items === 'string' ? JSON.parse(created.Items) : created.Items) : itemsWithUnits
       });
       const list = getStoredInwards();
       list.unshift(normalized);
@@ -142,7 +192,27 @@ export const materialInwardService = {
 
       return normalized;
     } catch (e) {
+      if (e.message && e.message.includes('Only \'Sent\' purchase orders')) {
+        throw e;
+      }
       console.warn('Fallback local createInward:', e.message);
+
+      // Validate PO status in local storage
+      if (inwardData.PurchaseOrderId) {
+        try {
+          const localPos = localStorage.getItem('pos_purchase_orders');
+          if (localPos) {
+            const parsed = JSON.parse(localPos);
+            const foundPo = parsed.find(p => p.Id === inwardData.PurchaseOrderId || p.DocumentNumber === inwardData.PurchaseOrderId);
+            if (foundPo && (foundPo.Status || '').toLowerCase() !== 'sent') {
+              throw new Error(`Cannot inward Purchase Order with status '${foundPo.Status}'. Only 'Sent' purchase orders can be received.`);
+            }
+          }
+        } catch (valErr) {
+          if (valErr.message.includes('Only \'Sent\' purchase orders')) throw valErr;
+        }
+      }
+
       const newInward = {
         Id: `inw_${Date.now()}`,
         PurchaseOrderId: inwardData.PurchaseOrderId || null,

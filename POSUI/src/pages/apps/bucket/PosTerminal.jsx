@@ -156,6 +156,8 @@ export default function PosTerminal() {
 
   const barcodeInputRef = useRef(null);
   const customerInputRef = useRef(null);
+  const scannerBufferRef = useRef('');
+  const lastKeyTimeRef = useRef(0);
 
   // Fetch customer suggestions
   const fetchCustomers = async (search = '') => {
@@ -217,6 +219,28 @@ export default function PosTerminal() {
   // Global Keyboard Shortcuts (F1: guide, F2: search, F4: customer, F7: held, F8: hold, F9: checkout, F10/Alt+P: pay, Alt+C: clear, Esc: cancel)
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Hardware barcode scanner wedge listener when not typing in other inputs
+      const isOtherInput = (e.target.tagName === 'INPUT' && e.target !== barcodeInputRef.current) || e.target.tagName === 'TEXTAREA';
+      if (!isOtherInput) {
+        if (e.key === 'Enter') {
+          if (scannerBufferRef.current.length >= 2) {
+            e.preventDefault();
+            const scanned = scannerBufferRef.current;
+            scannerBufferRef.current = '';
+            processScannedCode(scanned);
+            return;
+          }
+          scannerBufferRef.current = '';
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && e.target !== barcodeInputRef.current) {
+          const now = Date.now();
+          if (now - lastKeyTimeRef.current > 250) {
+            scannerBufferRef.current = '';
+          }
+          scannerBufferRef.current += e.key;
+          lastKeyTimeRef.current = now;
+        }
+      }
+
       if (e.key === 'F1') {
         e.preventDefault();
         setShortcutsDialogOpen(prev => !prev);
@@ -269,7 +293,7 @@ export default function PosTerminal() {
   }, [cart, shortcutsDialogOpen, heldBucketsDialogOpen, addCustomerDialogOpen, scannerOpen, searchQuery]);
 
   // Stock-aware product adder
-  const handleAddProductWithStockCheck = (product, explicitQty = null) => {
+  const handleAddProductWithStockCheck = (product, explicitQty = null, scannedMeta = null) => {
     if (!product) return false;
 
     // Expiry check
@@ -301,61 +325,76 @@ export default function PosTerminal() {
     }
 
     dispatch(addItem({ ...product, quantity: addQty }));
+    const metaTag = scannedMeta?.unit ? ` (Packet ${scannedMeta.unit})` : (scannedMeta?.serial ? ` [${scannedMeta.serial}]` : '');
     setToast({
       open: true,
-      message: `Added: ${product.Name} (+${formatQtyWithUnit(addQty, unit)})`,
+      message: `Added to Cart: ${product.Name}${metaTag} (+${formatQtyWithUnit(addQty, unit)})`,
       severity: 'success'
     });
     return true;
+  };
+
+  // Unified QR / Barcode Scan Processor
+  const processScannedCode = async (rawCode) => {
+    if (!rawCode) return false;
+    const clean = String(rawCode).trim();
+    if (!clean) return false;
+
+    try {
+      const matched = await productService.getProductByBarcode(clean);
+      if (matched) {
+        if (isWeighedOrMeasured(matched.Unit)) {
+          const inCart = cart.items.find(i => String(i.id) === String(matched.Id || matched.ProductNumber));
+          handleOpenWeightModal(matched, inCart ? inCart.quantity : 0, inCart ? 'edit' : 'add');
+          setSearchQuery('');
+          return true;
+        }
+
+        const added = handleAddProductWithStockCheck(matched, 1, matched._scannedMeta);
+        if (added) {
+          setSearchQuery('');
+          return true;
+        }
+      } else {
+        // Fallback: check first product match if search results exist (for partial search terms)
+        if (products.length > 0 && clean.length < 25 && !clean.includes('{')) {
+          const p0 = products[0];
+          if (isWeighedOrMeasured(p0.Unit)) {
+            const inCart = cart.items.find(i => String(i.id) === String(p0.Id || p0.ProductNumber));
+            handleOpenWeightModal(p0, inCart ? inCart.quantity : 0, inCart ? 'edit' : 'add');
+            setSearchQuery('');
+            return true;
+          } else if (handleAddProductWithStockCheck(p0)) {
+            setSearchQuery('');
+            return true;
+          }
+        }
+        setToast({
+          open: true,
+          message: `No product found for scanned code "${clean.length > 30 ? clean.slice(0, 30) + '...' : clean}"`,
+          severity: 'warning'
+        });
+        return false;
+      }
+    } catch (err) {
+      console.error('Scan resolution error:', err);
+      setToast({ open: true, message: `Scan error: ${err.message}`, severity: 'error' });
+      return false;
+    }
   };
 
   // Barcode Scan / Enter Key handler
   const handleBarcodeSubmit = async (e) => {
     if (e.key === 'Enter' && searchQuery.trim()) {
       e.preventDefault();
-      const code = searchQuery.trim();
-      const matched = await productService.getProductByBarcode(code);
-      if (matched) {
-        if (isWeighedOrMeasured(matched.Unit)) {
-          const inCart = cart.items.find(i => String(i.id) === String(matched.Id || matched.ProductNumber));
-          handleOpenWeightModal(matched, inCart ? inCart.quantity : 0, inCart ? 'edit' : 'add');
-          setSearchQuery('');
-        } else if (handleAddProductWithStockCheck(matched)) {
-          setSearchQuery('');
-        }
-      } else {
-        // If not exact barcode, check first product match
-        if (products.length > 0) {
-          const p0 = products[0];
-          if (isWeighedOrMeasured(p0.Unit)) {
-            const inCart = cart.items.find(i => String(i.id) === String(p0.Id || p0.ProductNumber));
-            handleOpenWeightModal(p0, inCart ? inCart.quantity : 0, inCart ? 'edit' : 'add');
-            setSearchQuery('');
-          } else if (handleAddProductWithStockCheck(p0)) {
-            setSearchQuery('');
-          }
-        } else {
-          setToast({ open: true, message: `No product found for barcode "${code}"`, severity: 'warning' });
-        }
-      }
+      await processScannedCode(searchQuery.trim());
     }
   };
 
   // Camera Barcode / QR Scan Handler
   const handleCameraScan = async (scannedCode) => {
     if (!scannedCode) return;
-    const cleanCode = String(scannedCode).trim();
-    const matched = await productService.getProductByBarcode(cleanCode);
-    if (matched) {
-      if (isWeighedOrMeasured(matched.Unit)) {
-        const inCart = cart.items.find(i => String(i.id) === String(matched.Id || matched.ProductNumber));
-        handleOpenWeightModal(matched, inCart ? inCart.quantity : 0, inCart ? 'edit' : 'add');
-      } else {
-        handleAddProductWithStockCheck(matched);
-      }
-    } else {
-      setToast({ open: true, message: `No product found for scanned code: "${cleanCode}"`, severity: 'warning' });
-    }
+    await processScannedCode(scannedCode);
   };
 
   // Add Product Card click

@@ -315,10 +315,14 @@ export const productService = {
     let clean = String(barcode || '').trim();
     if (!clean) return null;
 
-    if (clean.startsWith('{') && clean.endsWith('}')) {
+    let parsedMeta = null;
+    if (clean.includes('{') && clean.includes('}')) {
       try {
-        const parsed = JSON.parse(clean);
-        clean = String(parsed.barcode || parsed.ProductNumber || parsed.id || parsed.Id || clean).trim();
+        const start = clean.indexOf('{');
+        const end = clean.lastIndexOf('}');
+        const jsonStr = clean.slice(start, end + 1);
+        parsedMeta = JSON.parse(jsonStr);
+        clean = String(parsedMeta.barcode || parsedMeta.ProductNumber || parsedMeta.id || parsedMeta.Id || parsedMeta.serial || clean).trim();
       } catch (e) {}
     }
 
@@ -327,16 +331,37 @@ export const productService = {
       clean = parts[parts.length - 1];
     }
 
+    const baseCode = clean.includes('-') ? clean.split('-')[0].trim() : clean;
+
+    let result = null;
     try {
-      return await apiClient.get(`/api/products/barcode/${encodeURIComponent(clean)}`);
+      result = await apiClient.get(`/api/products/barcode/${encodeURIComponent(clean)}`);
     } catch (e) {
-      // Local fallback
-      const list = getStoredProducts();
-      return list.find(p => 
-        (p.ProductNumber === clean || p.Id === clean || String(p.ProductNumber).toLowerCase() === clean.toLowerCase()) && 
-        p.RecordStatus === 0
-      ) || null;
+      if (baseCode && baseCode !== clean) {
+        try {
+          result = await apiClient.get(`/api/products/barcode/${encodeURIComponent(baseCode)}`);
+        } catch (e2) {}
+      }
+
+      if (!result) {
+        // Local fallback
+        const list = getStoredProducts();
+        result = list.find(p => 
+          (p.ProductNumber === clean || p.Id === clean || String(p.ProductNumber).toLowerCase() === clean.toLowerCase() ||
+           p.ProductNumber === baseCode || p.Id === baseCode || String(p.ProductNumber).toLowerCase() === baseCode.toLowerCase() ||
+           (parsedMeta?.id && p.Id === parsedMeta.id)) && 
+          p.RecordStatus === 0
+        ) || null;
+      }
     }
+
+    if (result && parsedMeta) {
+      result = {
+        ...result,
+        _scannedMeta: parsedMeta
+      };
+    }
+    return result;
   },
 
   createProduct: async (productData) => {
