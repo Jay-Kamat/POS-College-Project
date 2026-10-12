@@ -16,21 +16,31 @@ public class PurchaseOrdersController : ControllerBase
         _db = db;
     }
 
+    private string? ResolveStoreId(string? queryStoreId)
+    {
+        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
+        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+    }
+
     [HttpGet]
     public async Task<IActionResult> GetPurchaseOrders(
         [FromQuery] string? status, 
         [FromQuery] string? vendorId, 
         [FromQuery] string? search,
-        [FromQuery] string? excludeStatus)
+        [FromQuery] string? excludeStatus,
+        [FromQuery] string? storeId)
     {
-        var list = await _db.GetPurchaseOrdersAsync(status, vendorId, search, excludeStatus);
+        var targetStoreId = ResolveStoreId(storeId);
+        var list = await _db.GetPurchaseOrdersAsync(status, vendorId, search, excludeStatus, targetStoreId);
         return Ok(list);
     }
 
     [HttpGet("stats")]
-    public async Task<IActionResult> GetPurchaseOrderStats()
+    public async Task<IActionResult> GetPurchaseOrderStats([FromQuery] string? storeId)
     {
-        var stats = await _db.GetPurchaseOrderStatsAsync();
+        var targetStoreId = ResolveStoreId(storeId);
+        var stats = await _db.GetPurchaseOrderStatsAsync(targetStoreId);
         return Ok(new { status = "success", data = stats });
     }
 
@@ -47,7 +57,8 @@ public class PurchaseOrdersController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreatePurchaseOrder([FromBody] JsonElement body)
     {
-        var created = await _db.CreatePurchaseOrderAsync(body);
+        var targetStoreId = ResolveStoreId(null);
+        var created = await _db.CreatePurchaseOrderAsync(body, targetStoreId);
         return StatusCode(201, created);
     }
 

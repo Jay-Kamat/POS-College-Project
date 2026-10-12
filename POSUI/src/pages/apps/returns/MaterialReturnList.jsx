@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -51,6 +52,7 @@ import productService from '../../../_api/productService';
 import { printDebitNote, numberToWordsINR } from '../../../utils/printService';
 
 export default function MaterialReturnList() {
+  const { activeStore } = useSelector(state => state.auth);
   const [returnNotes, setReturnNotes] = useState([]);
   const [stats, setStats] = useState({
     TotalReturns: 0,
@@ -111,7 +113,7 @@ export default function MaterialReturnList() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [activeStore?.id]);
 
   // Filtered Notes
   const filteredNotes = returnNotes.filter(note => {

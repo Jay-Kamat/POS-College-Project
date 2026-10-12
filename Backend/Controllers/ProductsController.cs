@@ -15,24 +15,34 @@ public class ProductsController : ControllerBase
         _db = db;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetProducts([FromQuery] string? categoryId, [FromQuery] string? searchTerm)
+    private string? ResolveStoreId(string? queryStoreId)
     {
-        var list = (await _db.GetProductsAsync(categoryId, searchTerm)).ToList();
+        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
+        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetProducts([FromQuery] string? categoryId, [FromQuery] string? searchTerm, [FromQuery] string? storeId)
+    {
+        var targetStoreId = ResolveStoreId(storeId);
+        var list = (await _db.GetProductsAsync(categoryId, searchTerm, targetStoreId)).ToList();
         return Ok(new { status = "success", count = list.Count, data = list });
     }
 
     [HttpGet("stats")]
-    public async Task<IActionResult> GetProductStats()
+    public async Task<IActionResult> GetProductStats([FromQuery] string? storeId)
     {
-        var stats = await _db.GetProductStatsAsync();
+        var targetStoreId = ResolveStoreId(storeId);
+        var stats = await _db.GetProductStatsAsync(targetStoreId);
         return Ok(new { status = "success", data = stats });
     }
 
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetProductById(string id)
+    public async Task<IActionResult> GetProductById(string id, [FromQuery] string? storeId)
     {
-        var item = await _db.GetProductByIdAsync(id);
+        var targetStoreId = ResolveStoreId(storeId);
+        var item = await _db.GetProductByIdAsync(id, targetStoreId);
         if (item == null)
             return NotFound(new { status = "error", message = "Product not found" });
 
@@ -40,9 +50,10 @@ public class ProductsController : ControllerBase
     }
 
     [HttpGet("barcode/{barcode}")]
-    public async Task<IActionResult> GetProductByBarcode(string barcode)
+    public async Task<IActionResult> GetProductByBarcode(string barcode, [FromQuery] string? storeId)
     {
-        var item = await _db.GetProductByBarcodeAsync(Uri.UnescapeDataString(barcode));
+        var targetStoreId = ResolveStoreId(storeId);
+        var item = await _db.GetProductByBarcodeAsync(Uri.UnescapeDataString(barcode), targetStoreId);
         if (item == null)
             return NotFound(new { status = "error", message = $"No product found for code \"{barcode}\"" });
 
@@ -54,6 +65,9 @@ public class ProductsController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(product.Name))
             return BadRequest(new { status = "error", message = "Product Name is required" });
+
+        if (string.IsNullOrWhiteSpace(product.StoreId))
+            product.StoreId = ResolveStoreId(null) ?? "store_mum_01";
 
         var created = await _db.CreateProductAsync(product);
         return StatusCode(201, new { status = "success", data = created });

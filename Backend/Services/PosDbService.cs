@@ -21,7 +21,7 @@ public class PosDbService
     // -------------------------------------------------------------
     // Products
     // -------------------------------------------------------------
-    public async Task<IEnumerable<Product>> GetProductsAsync(string? categoryId, string? searchTerm)
+    public async Task<IEnumerable<Product>> GetProductsAsync(string? categoryId, string? searchTerm, string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = @"SELECT p.id as Id, p.product_number as ProductNumber, p.name as Name, p.cost as Cost, 
@@ -29,11 +29,23 @@ public class PosDbService
                            p.is_exp_date as IsExpDate, p.days as Days, p.category_id as CategoryId, 
                            COALESCE(c.name, p.category_id) as CategoryName, p.tax_rate_id as TaxRateId, 
                            p.tax_percent as TaxPercent, p.stock_quantity as StockQuantity, 
+                           p.store_id as StoreId, COALESCE(s.name, p.store_id) as StoreName,
                            p.record_status as RecordStatus, p.created_at as Created, p.updated_at as Updated 
                     FROM products p
                     LEFT JOIN categories c ON p.category_id = c.id
+                    LEFT JOIN stores s ON p.store_id = s.id
                     WHERE p.record_status = 0";
         var p = new DynamicParameters();
+
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND p.store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        else
+        {
+            sql += " AND (p.store_id = 'store_mum_01' OR p.store_id IS NULL)";
+        }
 
         if (!string.IsNullOrEmpty(categoryId) && categoryId != "cat_all")
         {
@@ -51,7 +63,7 @@ public class PosDbService
         return await conn.QueryAsync<Product>(sql, p);
     }
 
-    public async Task<Product?> GetProductByIdAsync(string id)
+    public async Task<Product?> GetProductByIdAsync(string id, string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = @"SELECT p.id as Id, p.product_number as ProductNumber, p.name as Name, p.cost as Cost, 
@@ -59,14 +71,24 @@ public class PosDbService
                            p.is_exp_date as IsExpDate, p.days as Days, p.category_id as CategoryId, 
                            COALESCE(c.name, p.category_id) as CategoryName, p.tax_rate_id as TaxRateId, 
                            p.tax_percent as TaxPercent, p.stock_quantity as StockQuantity, 
+                           p.store_id as StoreId, COALESCE(s.name, p.store_id) as StoreName,
                            p.record_status as RecordStatus, p.created_at as Created, p.updated_at as Updated 
                     FROM products p
                     LEFT JOIN categories c ON p.category_id = c.id
-                    WHERE p.id = @Id AND p.record_status = 0";
-        return await conn.QueryFirstOrDefaultAsync<Product>(sql, new { Id = id });
+                    LEFT JOIN stores s ON p.store_id = s.id
+                    WHERE (p.id = @Id OR p.product_number = @Id) AND p.record_status = 0";
+        var p = new DynamicParameters();
+        p.Add("Id", id);
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND p.store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        sql += " LIMIT 1";
+        return await conn.QueryFirstOrDefaultAsync<Product>(sql, p);
     }
 
-    public async Task<Product?> GetProductByBarcodeAsync(string barcode)
+    public async Task<Product?> GetProductByBarcodeAsync(string barcode, string? storeId = null)
     {
         var clean = barcode?.Trim() ?? "";
         if (string.IsNullOrEmpty(clean)) return null;
@@ -98,19 +120,33 @@ public class PosDbService
                            p.is_exp_date as IsExpDate, p.days as Days, p.category_id as CategoryId, 
                            COALESCE(c.name, p.category_id) as CategoryName, p.tax_rate_id as TaxRateId, 
                            p.tax_percent as TaxPercent, p.stock_quantity as StockQuantity, 
+                           p.store_id as StoreId, COALESCE(s.name, p.store_id) as StoreName,
                            p.record_status as RecordStatus, p.created_at as Created, p.updated_at as Updated 
                     FROM products p
                     LEFT JOIN categories c ON p.category_id = c.id
+                    LEFT JOIN stores s ON p.store_id = s.id
                     WHERE (p.product_number = @Code OR p.id = @Code OR LOWER(p.product_number) = LOWER(@Code)
                            OR p.product_number = @BaseCode OR p.id = @BaseCode OR LOWER(p.product_number) = LOWER(@BaseCode)) 
-                      AND p.record_status = 0 LIMIT 1";
-        return await conn.QueryFirstOrDefaultAsync<Product>(sql, new { Code = clean, BaseCode = baseCode });
+                      AND p.record_status = 0";
+        var p = new DynamicParameters();
+        p.Add("Code", clean);
+        p.Add("BaseCode", baseCode);
+
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND (p.store_id = @StoreId OR p.store_id IS NULL)";
+            p.Add("StoreId", storeId.Trim());
+        }
+        sql += " LIMIT 1";
+
+        return await conn.QueryFirstOrDefaultAsync<Product>(sql, p);
     }
 
     public async Task<Product> CreateProductAsync(Product p)
     {
         var id = $"prd_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         var pNum = string.IsNullOrWhiteSpace(p.ProductNumber) ? $"200100{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString()[^6..]}" : p.ProductNumber;
+        var targetStoreId = string.IsNullOrWhiteSpace(p.StoreId) ? "store_mum_01" : p.StoreId.Trim();
         
         var taxRateId = p.TaxRateId;
         if (string.IsNullOrEmpty(taxRateId))
@@ -128,9 +164,9 @@ public class PosDbService
 
         using var conn = CreateConn();
         var sql = @"
-            INSERT INTO products (id, product_number, name, cost, unit, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, stock_quantity, record_status, created_id, updated_id)
-            VALUES (@Id, @ProductNumber, @Name, @Cost, COALESCE(@Unit, 'PCS'), @Ingredients, @Notes, @IsExpDate, @Days, @CategoryId, @TaxRateId, @TaxPercent, @StockQuantity, 0, 'user_01', 'user_01')
-            RETURNING id as Id, product_number as ProductNumber, name as Name, cost as Cost, COALESCE(unit, 'PCS') as Unit, ingredients as Ingredients, notes as Notes, is_exp_date as IsExpDate, days as Days, category_id as CategoryId, tax_rate_id as TaxRateId, tax_percent as TaxPercent, stock_quantity as StockQuantity, record_status as RecordStatus, created_at as Created, updated_at as Updated;
+            INSERT INTO products (id, product_number, name, cost, unit, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, stock_quantity, store_id, record_status, created_id, updated_id)
+            VALUES (@Id, @ProductNumber, @Name, @Cost, COALESCE(@Unit, 'PCS'), @Ingredients, @Notes, @IsExpDate, @Days, @CategoryId, @TaxRateId, @TaxPercent, @StockQuantity, @StoreId, 0, 'user_01', 'user_01')
+            RETURNING id as Id, product_number as ProductNumber, name as Name, cost as Cost, COALESCE(unit, 'PCS') as Unit, ingredients as Ingredients, notes as Notes, is_exp_date as IsExpDate, days as Days, category_id as CategoryId, tax_rate_id as TaxRateId, tax_percent as TaxPercent, stock_quantity as StockQuantity, store_id as StoreId, record_status as RecordStatus, created_at as Created, updated_at as Updated;
         ";
         return await conn.QuerySingleAsync<Product>(sql, new {
             Id = id,
@@ -145,7 +181,8 @@ public class PosDbService
             CategoryId = string.IsNullOrEmpty(p.CategoryId) ? "cat_dairy" : p.CategoryId,
             TaxRateId = taxRateId,
             TaxPercent = p.TaxPercent,
-            StockQuantity = p.StockQuantity >= 0 ? p.StockQuantity : 0
+            StockQuantity = p.StockQuantity >= 0 ? p.StockQuantity : 0,
+            StoreId = targetStoreId
         });
     }
 
@@ -182,7 +219,7 @@ public class PosDbService
                 product_number = COALESCE(@ProductNumber, product_number),
                 updated_at = NOW()
             WHERE id = @Id
-            RETURNING id as Id, product_number as ProductNumber, name as Name, cost as Cost, COALESCE(unit, 'PCS') as Unit, ingredients as Ingredients, notes as Notes, is_exp_date as IsExpDate, days as Days, category_id as CategoryId, tax_rate_id as TaxRateId, tax_percent as TaxPercent, stock_quantity as StockQuantity, record_status as RecordStatus, created_at as Created, updated_at as Updated;
+            RETURNING id as Id, product_number as ProductNumber, name as Name, cost as Cost, COALESCE(unit, 'PCS') as Unit, ingredients as Ingredients, notes as Notes, is_exp_date as IsExpDate, days as Days, category_id as CategoryId, tax_rate_id as TaxRateId, tax_percent as TaxPercent, stock_quantity as StockQuantity, store_id as StoreId, record_status as RecordStatus, created_at as Created, updated_at as Updated;
         ";
         return await conn.QueryFirstOrDefaultAsync<Product>(sql, new {
             Id = id,
@@ -208,7 +245,7 @@ public class PosDbService
         return rows > 0;
     }
 
-    public async Task<object> GetProductStatsAsync()
+    public async Task<object> GetProductStatsAsync(string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = @"
@@ -219,9 +256,20 @@ public class PosDbService
                 COALESCE(SUM(stock_quantity), 0) as totalstockunits,
                 COALESCE(SUM(cost * stock_quantity), 0) as totalvaluation
             FROM products 
-            WHERE record_status = 0;
+            WHERE record_status = 0
         ";
-        var row = await conn.QueryFirstOrDefaultAsync(sql);
+        var p = new DynamicParameters();
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        else
+        {
+            sql += " AND (store_id = 'store_mum_01' OR store_id IS NULL)";
+        }
+
+        var row = await conn.QueryFirstOrDefaultAsync(sql, p);
         int totalProducts = row != null ? (int)(row.totalproducts ?? 0) : 0;
         int lowStockCount = row != null ? (int)(row.lowstockcount ?? 0) : 0;
         int perishableCount = row != null ? (int)(row.perishablecount ?? 0) : 0;
@@ -414,11 +462,18 @@ public class PosDbService
     // -------------------------------------------------------------
     // Staged Buckets (Held Carts in PostgreSQL)
     // -------------------------------------------------------------
-    public async Task<IEnumerable<dynamic>> GetBucketsAsync()
+    public async Task<IEnumerable<dynamic>> GetBucketsAsync(string? storeId = null)
     {
         using var conn = CreateConn();
-        var sql = "SELECT id as Id, bucket_number as BucketNumber, customer_name as CustomerName, items_count as ItemsCount, total as Total, cart_data as CartDataRaw, timestamp as Timestamp FROM staged_buckets WHERE record_status = 0 ORDER BY created_at DESC";
-        var rows = await conn.QueryAsync(sql);
+        var sql = "SELECT id as Id, bucket_number as BucketNumber, customer_name as CustomerName, items_count as ItemsCount, total as Total, cart_data as CartDataRaw, timestamp as Timestamp, store_id as StoreId FROM staged_buckets WHERE record_status = 0";
+        var p = new DynamicParameters();
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        sql += " ORDER BY created_at DESC";
+        var rows = await conn.QueryAsync(sql, p);
         var result = new List<dynamic>();
         foreach (var r in rows)
         {
@@ -435,13 +490,14 @@ public class PosDbService
                 itemsCount = (int)(r.itemscount ?? 0),
                 total = (decimal)(r.total ?? 0m),
                 cartData = cartData,
-                timestamp = (string)(r.timestamp ?? "")
+                timestamp = (string)(r.timestamp ?? ""),
+                storeId = (string)(r.storeid ?? "store_mum_01")
             });
         }
         return result;
     }
 
-    public async Task<dynamic> SaveBucketAsync(JsonElement bucket)
+    public async Task<dynamic> SaveBucketAsync(JsonElement bucket, string? storeId = null)
     {
         using var conn = CreateConn();
         var id = bucket.TryGetProperty("id", out var idProp) ? idProp.GetString() : $"bkt_held_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
@@ -451,10 +507,14 @@ public class PosDbService
         var total = bucket.TryGetProperty("total", out var totProp) ? totProp.GetDecimal() : 0m;
         var time = bucket.TryGetProperty("timestamp", out var tsProp) ? tsProp.GetString() : DateTime.UtcNow.ToString("HH:mm");
         var cartDataJson = bucket.TryGetProperty("cartData", out var cdProp) ? cdProp.GetRawText() : "{}";
+        var targetStoreId = !string.IsNullOrWhiteSpace(storeId)
+            ? storeId.Trim()
+            : (bucket.TryGetProperty("storeId", out var stProp) ? stProp.GetString() : "store_mum_01");
+        if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
 
         var sql = @"
-            INSERT INTO staged_buckets (id, bucket_number, customer_name, items_count, total, cart_data, timestamp, record_status)
-            VALUES (@Id, @BucketNumber, @CustomerName, @ItemsCount, @Total, @CartData::jsonb, @Timestamp, 0)
+            INSERT INTO staged_buckets (id, bucket_number, customer_name, items_count, total, cart_data, timestamp, store_id, record_status)
+            VALUES (@Id, @BucketNumber, @CustomerName, @ItemsCount, @Total, @CartData::jsonb, @Timestamp, @StoreId, 0)
             ON CONFLICT (id) DO UPDATE
             SET bucket_number = EXCLUDED.bucket_number,
                 customer_name = EXCLUDED.customer_name,
@@ -462,6 +522,7 @@ public class PosDbService
                 total = EXCLUDED.total,
                 cart_data = EXCLUDED.cart_data,
                 timestamp = EXCLUDED.timestamp,
+                store_id = EXCLUDED.store_id,
                 record_status = 0;
         ";
 
@@ -472,10 +533,11 @@ public class PosDbService
             ItemsCount = itemsCount,
             Total = total,
             CartData = cartDataJson,
-            Timestamp = time
+            Timestamp = time,
+            StoreId = targetStoreId
         });
 
-        return new { id, bucketNumber = bucketNum, customerName = custName, itemsCount, total, timestamp = time };
+        return new { id, bucketNumber = bucketNum, customerName = custName, itemsCount, total, timestamp = time, storeId = targetStoreId };
     }
 
     public async Task<bool> DeleteBucketAsync(string id)
@@ -488,11 +550,17 @@ public class PosDbService
     // -------------------------------------------------------------
     // Invoices (Atomic with Stock Check & Decrement)
     // -------------------------------------------------------------
-    public async Task<IEnumerable<Invoice>> GetInvoicesAsync(string? startDate, string? endDate, string? search, int? paymentMode, string? status = null)
+    public async Task<IEnumerable<Invoice>> GetInvoicesAsync(string? startDate, string? endDate, string? search, int? paymentMode, string? status = null, string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = "SELECT id as Id, document_number as DocumentNumber, date as Date, customer_id as CustomerId, customer_name as CustomerName, mobile_number as MobileNumber, store_id as StoreId, store_name as StoreName, subtotal as Subtotal, cgst as Cgst, sgst as Sgst, igst as Igst, round_off as RoundOff, amount as Amount, mode_of_payment as ModeOfPayment, is_payment_received as IsPaymentReceived, is_share_receipt_through_sms as IsShareReceiptThroughSms, cancellation_reason as CancellationReason, record_status as RecordStatus, items as ItemsRaw FROM invoices WHERE 1=1";
         var p = new DynamicParameters();
+
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
 
         if (!string.IsNullOrWhiteSpace(status))
         {
@@ -578,9 +646,10 @@ public class PosDbService
         return result;
     }
 
-    public async Task<InvoiceStatsDto> GetInvoiceStatsAsync()
+    public async Task<InvoiceStatsDto> GetInvoiceStatsAsync(string? storeId = null)
     {
         using var conn = CreateConn();
+        var p = new DynamicParameters();
         var sql = @"
             SELECT 
                 COUNT(*) as TotalInvoices,
@@ -591,9 +660,15 @@ public class PosDbService
                 COALESCE(SUM(amount) FILTER (WHERE record_status = 0 AND mode_of_payment = 1), 0) as UpiSales,
                 COALESCE(SUM(amount) FILTER (WHERE record_status = 0 AND mode_of_payment = 2), 0) as CardSales,
                 COALESCE(SUM(cgst + sgst + igst) FILTER (WHERE record_status = 0), 0) as TotalTax
-            FROM invoices;
+            FROM invoices
+            WHERE 1=1
         ";
-        var row = await conn.QueryFirstOrDefaultAsync(sql);
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        var row = await conn.QueryFirstOrDefaultAsync(sql, p);
         if (row == null) return new InvoiceStatsDto();
         return new InvoiceStatsDto
         {
@@ -656,9 +731,11 @@ public class PosDbService
 
         try
         {
-            var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM invoices", transaction: tx);
+            var targetStoreId = activeStore?.Id ?? "store_mum_01";
+            var prefix = string.IsNullOrWhiteSpace(activeStore?.InvoicePrefix) ? "INV" : activeStore.InvoicePrefix.Trim();
+            var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM invoices WHERE store_id = @StoreId", new { StoreId = targetStoreId }, transaction: tx);
             var sequence = 101 + count;
-            var documentNumber = $"INV-2627-{sequence:D6}";
+            var documentNumber = $"{prefix}-2627-{sequence:D6}";
             var id = $"inv_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
             var storeState = (activeStore?.State ?? "Maharashtra").ToLower();
@@ -686,13 +763,16 @@ public class PosDbService
                 }
 
                 var lineTotal = lineSubtotal + cgst + sgst + igst;
-                var pId = item.Id ?? "";
-                var pNum = item.ProductNumber ?? item.Id ?? "";
+                var pId = !string.IsNullOrWhiteSpace(item.Id) ? item.Id : (item.ProductId ?? "");
+                var pNum = !string.IsNullOrWhiteSpace(item.ProductNumber) ? item.ProductNumber : (!string.IsNullOrWhiteSpace(item.Barcode) ? item.Barcode : pId);
+                var pName = !string.IsNullOrWhiteSpace(item.Name) ? item.Name : (item.ProductName ?? "Product");
 
-                // 1. Stock check
+                // 1. Stock check scoped to active store
                 var stockRow = await conn.QueryFirstOrDefaultAsync(
-                    "SELECT id, name, stock_quantity FROM products WHERE (id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum) AND record_status = 0 LIMIT 1",
-                    new { Id = pId, PNum = pNum },
+                    @"SELECT id, name, stock_quantity FROM products 
+                      WHERE (id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum) 
+                        AND (store_id = @StoreId OR store_id IS NULL) AND record_status = 0 LIMIT 1",
+                    new { Id = pId, PNum = pNum, StoreId = targetStoreId },
                     transaction: tx
                 );
 
@@ -700,23 +780,33 @@ public class PosDbService
                 {
                     decimal avail = (decimal)(stockRow.stock_quantity ?? 0m);
                     if (avail <= 0)
-                        throw new InvalidOperationException($"Item \"{stockRow.name}\" is out of stock in inventory.");
+                        throw new InvalidOperationException($"Item \"{stockRow.name}\" is out of stock in this outlet's inventory.");
                     if (qty > avail)
-                        throw new InvalidOperationException($"Cannot checkout {qty} of \"{stockRow.name}\". Only {avail} available in inventory.");
-                }
+                        throw new InvalidOperationException($"Cannot checkout {qty} of \"{stockRow.name}\". Only {avail} available in this outlet.");
 
-                // 2. Decrement stock
-                await conn.ExecuteAsync(@"
-                    UPDATE products
-                    SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
-                    WHERE id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum
-                ", new { Qty = qty, Id = pId, PNum = pNum }, transaction: tx);
+                    // 2. Decrement stock in active store
+                    await conn.ExecuteAsync(@"
+                        UPDATE products
+                        SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
+                        WHERE id = @FoundId AND (store_id = @StoreId OR store_id IS NULL)
+                    ", new { Qty = qty, FoundId = (string)stockRow.id, StoreId = targetStoreId }, transaction: tx);
+                }
+                else
+                {
+                    // Fallback decrement
+                    await conn.ExecuteAsync(@"
+                        UPDATE products
+                        SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
+                        WHERE (id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum)
+                          AND (store_id = @StoreId OR store_id IS NULL)
+                    ", new { Qty = qty, Id = pId, PNum = pNum, StoreId = targetStoreId }, transaction: tx);
+                }
 
                 invoiceItems.Add(new InvoiceItem
                 {
                     ProductId = pId,
                     ProductNumber = pNum,
-                    ProductName = item.Name ?? "Product",
+                    ProductName = pName,
                     Quantity = qty,
                     Unit = item.Unit ?? "PCS",
                     Rate = rate,
@@ -773,7 +863,7 @@ public class PosDbService
                 CustomerId = cart.Customer?.Id,
                 CustomerName = cart.Customer?.Name ?? "Walk-in Customer",
                 MobileNumber = cart.Customer?.MobileNumber ?? "",
-                StoreId = activeStore?.Id ?? "store_mum_01",
+                StoreId = targetStoreId,
                 StoreName = activeStore?.Name ?? "DailyMart Express",
                 cart.Subtotal,
                 cart.Cgst,
@@ -797,7 +887,7 @@ public class PosDbService
                 CustomerId = cart.Customer?.Id,
                 CustomerName = cart.Customer?.Name ?? "Walk-in Customer",
                 MobileNumber = cart.Customer?.MobileNumber ?? "",
-                StoreId = activeStore?.Id ?? "store_mum_01",
+                StoreId = targetStoreId,
                 StoreName = activeStore?.Name ?? "DailyMart Express",
                 Subtotal = cart.Subtotal,
                 Cgst = cart.Cgst,
@@ -826,14 +916,16 @@ public class PosDbService
         try
         {
             var invRow = await conn.QueryFirstOrDefaultAsync(
-                "SELECT id, document_number, items, record_status FROM invoices WHERE id = @Id",
+                "SELECT id, document_number, store_id, items, record_status FROM invoices WHERE id = @Id",
                 new { Id = id },
                 transaction: tx
             );
             if (invRow == null) return null;
             if (invRow.record_status == 1) return await GetInvoiceByIdAsync(id);
 
-            // Restore stock
+            var invStoreId = (string)(invRow.store_id ?? "store_mum_01");
+
+            // Restore stock to the specific outlet
             if (invRow.items != null)
             {
                 try
@@ -844,8 +936,9 @@ public class PosDbService
                         await conn.ExecuteAsync(@"
                             UPDATE products
                             SET stock_quantity = stock_quantity + @Qty, updated_at = NOW()
-                            WHERE id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum
-                        ", new { Qty = itm.Quantity, Id = itm.ProductId, PNum = itm.ProductNumber }, transaction: tx);
+                            WHERE (id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum)
+                              AND (store_id = @StoreId OR store_id IS NULL)
+                        ", new { Qty = itm.Quantity, Id = itm.ProductId, PNum = itm.ProductNumber, StoreId = invStoreId }, transaction: tx);
                     }
                 }
                 catch { }
@@ -953,7 +1046,38 @@ public class PosDbService
                 updated_at = NOW()
             RETURNING id as Id, name as Name, long_name as LongName, address as Address, mobile_number as MobileNumber, phone_number as PhoneNumber, email as Email, food_license_number as FoodLicenseNumber, gst_number as GstNumber, country as Country, state as State, invoice_prefix as InvoicePrefix, receipt_footer_text as ReceiptFooterText, paper_size as PaperSize, enable_whatsapp_receipt as EnableWhatsAppReceipt, record_status as RecordStatus;
         ";
-        return await conn.QuerySingleAsync<Store>(sql, s);
+        var created = await conn.QuerySingleAsync<Store>(sql, s);
+
+        // Seed initial product catalog for this brand-new store outlet with zero stock
+        try
+        {
+            var seedSql = @"
+                INSERT INTO products (id, product_number, name, cost, unit, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, stock_quantity, store_id, record_status)
+                SELECT 
+                    'prd_' || SUBSTRING(REPLACE(@StoreId, '-', '_') FROM 7) || '_' || SUBSTRING(id FROM 5),
+                    product_number,
+                    name,
+                    cost,
+                    unit,
+                    ingredients,
+                    notes,
+                    is_exp_date,
+                    days,
+                    category_id,
+                    tax_rate_id,
+                    tax_percent,
+                    0,
+                    @StoreId,
+                    0
+                FROM products
+                WHERE store_id = 'store_mum_01' AND record_status = 0
+                ON CONFLICT (product_number, store_id) DO NOTHING;
+            ";
+            await conn.ExecuteAsync(seedSql, new { StoreId = created.Id });
+        }
+        catch { }
+
+        return created;
     }
 
     public async Task<Store> UpdateStoreProfileAsync(Store s)
@@ -1112,15 +1236,21 @@ public class PosDbService
     // -------------------------------------------------------------
     // Purchase Orders
     // -------------------------------------------------------------
-    public async Task<IEnumerable<dynamic>> GetPurchaseOrdersAsync(string? status = null, string? vendorId = null, string? search = null, string? excludeStatus = null)
+    public async Task<IEnumerable<dynamic>> GetPurchaseOrdersAsync(string? status = null, string? vendorId = null, string? search = null, string? excludeStatus = null, string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = @"SELECT id as ""Id"", document_number as ""DocumentNumber"", vendor_id as ""VendorId"", 
-                           vendor_name as ""VendorName"", date as ""Date"", status as ""Status"", 
+                           vendor_name as ""VendorName"", store_id as ""StoreId"", date as ""Date"", status as ""Status"", 
                            total_amount as ""TotalAmount"", items as ""Items"", created_at as ""CreatedAt"" 
                     FROM purchase_orders 
                     WHERE record_status = 0";
         var p = new DynamicParameters();
+
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
 
         if (!string.IsNullOrWhiteSpace(status) && status != "All")
         {
@@ -1156,16 +1286,17 @@ public class PosDbService
     {
         using var conn = CreateConn();
         var sql = @"SELECT id as ""Id"", document_number as ""DocumentNumber"", vendor_id as ""VendorId"", 
-                           vendor_name as ""VendorName"", date as ""Date"", status as ""Status"", 
+                           vendor_name as ""VendorName"", store_id as ""StoreId"", date as ""Date"", status as ""Status"", 
                            total_amount as ""TotalAmount"", items as ""Items"", created_at as ""CreatedAt"" 
                     FROM purchase_orders 
                     WHERE (id = @Id OR document_number = @Id) AND record_status = 0";
         return await conn.QueryFirstOrDefaultAsync(sql, new { Id = id });
     }
 
-    public async Task<object> GetPurchaseOrderStatsAsync()
+    public async Task<object> GetPurchaseOrderStatsAsync(string? storeId = null)
     {
         using var conn = CreateConn();
+        var p = new DynamicParameters();
         var sql = @"
             SELECT 
                 COUNT(*) as totalorders,
@@ -1173,9 +1304,14 @@ public class PosDbService
                 COUNT(CASE WHEN status = 'Received' THEN 1 END) as receivedorders,
                 COALESCE(SUM(total_amount), 0) as totalspend
             FROM purchase_orders 
-            WHERE record_status = 0;
+            WHERE record_status = 0
         ";
-        var row = await conn.QueryFirstOrDefaultAsync(sql);
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        var row = await conn.QueryFirstOrDefaultAsync(sql, p);
         int totalOrders = row != null ? (int)(row.totalorders ?? 0) : 0;
         int pendingOrders = row != null ? (int)(row.pendingorders ?? 0) : 0;
         int receivedOrders = row != null ? (int)(row.receivedorders ?? 0) : 0;
@@ -1190,13 +1326,18 @@ public class PosDbService
         };
     }
 
-    public async Task<dynamic> CreatePurchaseOrderAsync(JsonElement data)
+    public async Task<dynamic> CreatePurchaseOrderAsync(JsonElement data, string? storeId = null)
     {
         var id = $"po_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         
         using var conn = CreateConn();
         var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM purchase_orders");
         var docNum = $"PO-2026-{String.Format("{0:D5}", count + 51)}";
+
+        var targetStoreId = !string.IsNullOrWhiteSpace(storeId)
+            ? storeId.Trim()
+            : (data.TryGetProperty("StoreId", out var sId) ? sId.GetString() : "store_mum_01");
+        if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
 
         var vendorId = data.TryGetProperty("VendorId", out var vId) ? vId.GetString() : "vnd_01";
         var vendorName = data.TryGetProperty("VendorName", out var vNm) ? vNm.GetString() : null;
@@ -1218,9 +1359,9 @@ public class PosDbService
 
         var sql = @"
             INSERT INTO purchase_orders (id, document_number, vendor_id, vendor_name, store_id, status, total_amount, items)
-            VALUES (@Id, @DocNum, @VendorId, @VendorName, 'store_mum_01', 'Sent', @Total, @Items::jsonb)
+            VALUES (@Id, @DocNum, @VendorId, @VendorName, @StoreId, 'Sent', @Total, @Items::jsonb)
             RETURNING id as ""Id"", document_number as ""DocumentNumber"", vendor_id as ""VendorId"", 
-                      vendor_name as ""VendorName"", date as ""Date"", status as ""Status"", 
+                      vendor_name as ""VendorName"", store_id as ""StoreId"", date as ""Date"", status as ""Status"", 
                       total_amount as ""TotalAmount"", items as ""Items"";
         ";
         return await conn.QuerySingleAsync(sql, new {
@@ -1228,6 +1369,7 @@ public class PosDbService
             DocNum = docNum,
             VendorId = vendorId,
             VendorName = vendorName,
+            StoreId = targetStoreId,
             Total = totalAmount,
             Items = itemsJson
         });
@@ -1250,32 +1392,39 @@ public class PosDbService
     // -------------------------------------------------------------
     // Material Inward
     // -------------------------------------------------------------
-    public async Task<IEnumerable<dynamic>> GetMaterialInwardAsync()
+    public async Task<IEnumerable<dynamic>> GetMaterialInwardAsync(string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = @"SELECT id as ""Id"", purchase_order_id as ""PurchaseOrderId"", vendor_id as ""VendorId"", 
-                           vendor_name as ""VendorName"", date as ""Date"", is_po_available as ""IsPoAvailable"", 
+                           vendor_name as ""VendorName"", store_id as ""StoreId"", store_name as ""StoreName"", date as ""Date"", is_po_available as ""IsPoAvailable"", 
                            items as ""Items"", created_at as ""CreatedAt"" 
                     FROM material_inward 
-                    WHERE record_status = 0 
-                    ORDER BY date DESC";
-        return await conn.QueryAsync(sql);
+                    WHERE record_status = 0";
+        var p = new DynamicParameters();
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        sql += " ORDER BY date DESC";
+        return await conn.QueryAsync(sql, p);
     }
 
     public async Task<dynamic?> GetMaterialInwardByIdAsync(string id)
     {
         using var conn = CreateConn();
         var sql = @"SELECT id as ""Id"", purchase_order_id as ""PurchaseOrderId"", vendor_id as ""VendorId"", 
-                           vendor_name as ""VendorName"", date as ""Date"", is_po_available as ""IsPoAvailable"", 
+                           vendor_name as ""VendorName"", store_id as ""StoreId"", store_name as ""StoreName"", date as ""Date"", is_po_available as ""IsPoAvailable"", 
                            items as ""Items"", created_at as ""CreatedAt"" 
                     FROM material_inward 
                     WHERE id = @Id AND record_status = 0";
         return await conn.QueryFirstOrDefaultAsync(sql, new { Id = id });
     }
 
-    public async Task<object> GetMaterialInwardStatsAsync()
+    public async Task<object> GetMaterialInwardStatsAsync(string? storeId = null)
     {
         using var conn = CreateConn();
+        var p = new DynamicParameters();
         var sql = @"
             SELECT 
                 COUNT(*) as totalinwards,
@@ -1283,9 +1432,14 @@ public class PosDbService
                 COUNT(DISTINCT vendor_id) as activevendors,
                 COUNT(CASE WHEN is_po_available = true THEN 1 END) as poinwards
             FROM material_inward 
-            WHERE record_status = 0;
+            WHERE record_status = 0
         ";
-        var row = await conn.QueryFirstOrDefaultAsync(sql);
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        var row = await conn.QueryFirstOrDefaultAsync(sql, p);
         int totalInwards = row != null ? (int)(row.totalinwards ?? 0) : 0;
         int todayInwards = row != null ? (int)(row.todayinwards ?? 0) : 0;
         int activeVendors = row != null ? (int)(row.activevendors ?? 0) : 0;
@@ -1300,7 +1454,45 @@ public class PosDbService
         };
     }
 
-    public async Task<dynamic> CreateMaterialInwardAsync(JsonElement data)
+    private static string? GetJsonString(JsonElement el, params string[] names)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return null;
+        foreach (var prop in el.EnumerateObject())
+        {
+            foreach (var n in names)
+            {
+                if (string.Equals(prop.Name, n, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String)
+                        return prop.Value.GetString();
+                    if (prop.Value.ValueKind == JsonValueKind.Number)
+                        return prop.Value.GetRawText();
+                }
+            }
+        }
+        return null;
+    }
+
+    private static decimal GetJsonDecimal(JsonElement el, params string[] names)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return 0m;
+        foreach (var prop in el.EnumerateObject())
+        {
+            foreach (var n in names)
+            {
+                if (string.Equals(prop.Name, n, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.Number)
+                        return prop.Value.GetDecimal();
+                    if (prop.Value.ValueKind == JsonValueKind.String && decimal.TryParse(prop.Value.GetString(), out var d))
+                        return d;
+                }
+            }
+        }
+        return 0m;
+    }
+
+    public async Task<dynamic> CreateMaterialInwardAsync(JsonElement data, string? storeId = null)
     {
         var id = $"inw_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         using var conn = (NpgsqlConnection)CreateConn();
@@ -1309,8 +1501,20 @@ public class PosDbService
 
         try
         {
-            var vendorId = data.TryGetProperty("VendorId", out var vId) ? vId.GetString() : "vnd_01";
-            var vendorName = data.TryGetProperty("VendorName", out var vNm) ? vNm.GetString() : null;
+            var targetStoreId = !string.IsNullOrWhiteSpace(storeId)
+                ? storeId.Trim()
+                : (GetJsonString(data, "storeId", "StoreId") ?? "store_mum_01");
+            if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
+
+            var storeName = GetJsonString(data, "storeName", "StoreName");
+            if (string.IsNullOrWhiteSpace(storeName))
+            {
+                storeName = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT name FROM stores WHERE id = @Id", new { Id = targetStoreId }, transaction: tx) ?? "DailyMart Store";
+            }
+
+            var vendorId = GetJsonString(data, "vendorId", "VendorId") ?? "vnd_01";
+            var vendorName = GetJsonString(data, "vendorName", "VendorName");
             if (string.IsNullOrWhiteSpace(vendorName))
             {
                 var vRow = await conn.QueryFirstOrDefaultAsync<string>(
@@ -1318,37 +1522,50 @@ public class PosDbService
                 vendorName = vRow ?? "Supplier";
             }
 
-            var poId = data.TryGetProperty("PurchaseOrderId", out var pId) ? pId.GetString() : null;
-            var isPo = data.TryGetProperty("IsPoAvailable", out var ip) && ip.GetBoolean();
+            var poId = GetJsonString(data, "purchaseOrderId", "PurchaseOrderId", "poId");
+            bool isPo = false;
+            foreach (var prop in data.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "isPoAvailable", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.True || prop.Value.ValueKind == JsonValueKind.False)
+                        isPo = prop.Value.GetBoolean();
+                    break;
+                }
+            }
 
-            var itemsJson = data.TryGetProperty("Items", out var itms) ? itms.GetRawText() : "[]";
+            JsonElement itemsArray = default;
+            bool hasItems = false;
+            foreach (var prop in data.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "items", StringComparison.OrdinalIgnoreCase) && prop.Value.ValueKind == JsonValueKind.Array)
+                {
+                    itemsArray = prop.Value;
+                    hasItems = true;
+                    break;
+                }
+            }
 
-            if (data.TryGetProperty("Items", out var itemsArray) && itemsArray.ValueKind == JsonValueKind.Array)
+            var itemsJson = hasItems ? itemsArray.GetRawText() : "[]";
+
+            if (hasItems)
             {
                 foreach (var itm in itemsArray.EnumerateArray())
                 {
-                    var prodId = itm.TryGetProperty("ProductId", out var pid) ? pid.GetString() : "";
-                    var barcode = itm.TryGetProperty("Barcode", out var bc) ? bc.GetString() : "";
-
-                    decimal receivedQty = 0;
-                    if (itm.TryGetProperty("ReceivedQty", out var rq))
-                    {
-                        if (rq.ValueKind == JsonValueKind.Number) receivedQty = rq.GetDecimal();
-                        else if (decimal.TryParse(rq.GetString(), out var pq)) receivedQty = pq;
-                    }
-                    else if (itm.TryGetProperty("Quantity", out var q))
-                    {
-                        if (q.ValueKind == JsonValueKind.Number) receivedQty = q.GetDecimal();
-                        else if (decimal.TryParse(q.GetString(), out var pq)) receivedQty = pq;
-                    }
+                    var prodId = GetJsonString(itm, "productId", "id") ?? "";
+                    var barcode = GetJsonString(itm, "barcode", "productNumber") ?? "";
+                    var prodNumber = GetJsonString(itm, "productNumber", "barcode") ?? "";
+                    var prodName = GetJsonString(itm, "productName", "name") ?? "";
+                    decimal receivedQty = GetJsonDecimal(itm, "receivedQty", "quantity", "orderedQty");
 
                     if (receivedQty > 0)
                     {
                         await conn.ExecuteAsync(@"
                             UPDATE products
                             SET stock_quantity = stock_quantity + @Qty, updated_at = NOW()
-                            WHERE id = @Id OR product_number = @Id OR id = @Bc OR product_number = @Bc
-                        ", new { Qty = receivedQty, Id = prodId, Bc = barcode }, transaction: tx);
+                            WHERE (id = @Id OR product_number = @Id OR id = @Bc OR product_number = @Bc OR id = @Pn OR product_number = @Pn OR (name = @Nm AND @Nm <> ''))
+                              AND (store_id = @StoreId OR store_id IS NULL)
+                        ", new { Qty = receivedQty, Id = prodId, Bc = barcode, Pn = prodNumber, Nm = prodName, StoreId = targetStoreId }, transaction: tx);
                     }
                 }
             }
@@ -1377,10 +1594,10 @@ public class PosDbService
             }
 
             var sql = @"
-                INSERT INTO material_inward (id, purchase_order_id, vendor_id, vendor_name, is_po_available, items)
-                VALUES (@Id, @PoId, @VendorId, @VendorName, @IsPo, @Items::jsonb)
+                INSERT INTO material_inward (id, purchase_order_id, vendor_id, vendor_name, store_id, store_name, is_po_available, items)
+                VALUES (@Id, @PoId, @VendorId, @VendorName, @StoreId, @StoreName, @IsPo, @Items::jsonb)
                 RETURNING id as ""Id"", purchase_order_id as ""PurchaseOrderId"", vendor_id as ""VendorId"", 
-                          vendor_name as ""VendorName"", date as ""Date"", is_po_available as ""IsPoAvailable"", 
+                          vendor_name as ""VendorName"", store_id as ""StoreId"", store_name as ""StoreName"", date as ""Date"", is_po_available as ""IsPoAvailable"", 
                           items as ""Items"";
             ";
             var res = await conn.QuerySingleAsync(sql, new {
@@ -1388,6 +1605,8 @@ public class PosDbService
                 PoId = poId,
                 VendorId = vendorId,
                 VendorName = vendorName,
+                StoreId = targetStoreId,
+                StoreName = storeName,
                 IsPo = isPo,
                 Items = itemsJson
             }, transaction: tx);
@@ -1411,7 +1630,7 @@ public class PosDbService
         return await conn.QueryAsync("SELECT id as \"Id\", name as \"Name\" FROM return_reasons ORDER BY name ASC");
     }
 
-    public async Task<IEnumerable<dynamic>> GetMaterialReturnsAsync(string? reasonId = null, string? vendorId = null, string? search = null)
+    public async Task<IEnumerable<dynamic>> GetMaterialReturnsAsync(string? reasonId = null, string? vendorId = null, string? search = null, string? storeId = null)
     {
         using var conn = CreateConn();
         var sql = @"
@@ -1432,6 +1651,11 @@ public class PosDbService
             WHERE record_status = 0
         ";
         var p = new DynamicParameters();
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
         if (!string.IsNullOrWhiteSpace(reasonId) && reasonId != "All")
         {
             sql += " AND material_return_id = @ReasonId";
@@ -1474,9 +1698,10 @@ public class PosDbService
         return await conn.QueryFirstOrDefaultAsync(sql, new { Id = id });
     }
 
-    public async Task<object> GetMaterialReturnStatsAsync()
+    public async Task<object> GetMaterialReturnStatsAsync(string? storeId = null)
     {
         using var conn = CreateConn();
+        var p = new DynamicParameters();
         var sql = @"
             SELECT 
                 COUNT(*) as totalreturns,
@@ -1484,9 +1709,14 @@ public class PosDbService
                 COUNT(CASE WHEN status = 'Credit Note Pending' THEN 1 END) as pendingcreditnotes,
                 COUNT(CASE WHEN return_reason ILIKE '%Expired%' THEN 1 END) as expiredreturns
             FROM material_returns 
-            WHERE record_status = 0;
+            WHERE record_status = 0
         ";
-        var row = await conn.QueryFirstOrDefaultAsync(sql);
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        var row = await conn.QueryFirstOrDefaultAsync(sql, p);
         int totalReturns = row != null ? (int)(row.totalreturns ?? 0) : 0;
         decimal totalReturnValue = row != null ? (decimal)(row.totalreturnvalue ?? 0) : 0m;
         int pendingCreditNotes = row != null ? (int)(row.pendingcreditnotes ?? 0) : 0;
@@ -1501,7 +1731,7 @@ public class PosDbService
         };
     }
 
-    public async Task<dynamic> CreateMaterialReturnAsync(JsonElement data)
+    public async Task<dynamic> CreateMaterialReturnAsync(JsonElement data, string? storeId = null)
     {
         var id = $"mrn_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
@@ -1511,6 +1741,11 @@ public class PosDbService
 
         try
         {
+            var targetStoreId = !string.IsNullOrWhiteSpace(storeId)
+                ? storeId.Trim()
+                : (data.TryGetProperty("StoreId", out var sId) ? sId.GetString() : "store_mum_01");
+            if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
+
             var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM material_returns", transaction: tx);
             var docNum = $"MRN-2026-{String.Format("{0:D5}", count + 14)}";
 
@@ -1544,7 +1779,7 @@ public class PosDbService
 
             var itemsJson = data.TryGetProperty("Items", out var itms) ? itms.GetRawText() : "[]";
 
-            // Decrement inventory stock in products table for each returned line item
+            // Decrement inventory stock in products table specifically for this store
             if (data.TryGetProperty("Items", out var itemsArray) && itemsArray.ValueKind == JsonValueKind.Array)
             {
                 foreach (var itm in itemsArray.EnumerateArray())
@@ -1567,17 +1802,17 @@ public class PosDbService
                         await conn.ExecuteAsync(@"
                             UPDATE products
                             SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
-                            WHERE id = @Id OR product_number = @Id
-                        ", new { Qty = qty, Id = prodId }, transaction: tx);
+                            WHERE (id = @Id OR product_number = @Id) AND (store_id = @StoreId OR store_id IS NULL)
+                        ", new { Qty = qty, Id = prodId, StoreId = targetStoreId }, transaction: tx);
                     }
                 }
             }
 
             var sql = @"
                 INSERT INTO material_returns (id, document_number, vendor_id, vendor_name, store_id, material_return_id, return_reason, total_return_amount, status, items)
-                VALUES (@Id, @DocNum, @VendorId, @VendorName, 'store_mum_01', @MaterialReturnId, @ReturnReason, @Total, 'Credit Note Pending', @Items::jsonb)
+                VALUES (@Id, @DocNum, @VendorId, @VendorName, @StoreId, @MaterialReturnId, @ReturnReason, @Total, 'Credit Note Pending', @Items::jsonb)
                 RETURNING id as ""Id"", document_number as ""DocumentNumber"", date as ""Date"", 
-                          vendor_id as ""VendorId"", vendor_name as ""VendorName"",
+                          vendor_id as ""VendorId"", vendor_name as ""VendorName"", store_id as ""StoreId"",
                           material_return_id as ""MaterialReturnId"", return_reason as ""ReturnReason"",
                           total_return_amount as ""TotalReturnAmount"", status as ""Status"", items as ""Items"";
             ";
@@ -1586,6 +1821,7 @@ public class PosDbService
                 DocNum = docNum,
                 VendorId = vendorId,
                 VendorName = vendorName,
+                StoreId = targetStoreId,
                 MaterialReturnId = materialReturnId,
                 ReturnReason = returnReason,
                 Total = totalAmount,
@@ -1620,9 +1856,10 @@ public class PosDbService
     // -------------------------------------------------------------
     // Reports & Dashboard KPIs
     // -------------------------------------------------------------
-    public async Task<dynamic> GetDashboardKpisAsync()
+    public async Task<dynamic> GetDashboardKpisAsync(string? storeId = null)
     {
         using var conn = CreateConn();
+        var p = new DynamicParameters();
         var salesSql = @"
             SELECT 
                 COUNT(*) as TotalInvoices,
@@ -1632,9 +1869,17 @@ public class PosDbService
                 COALESCE(SUM(amount) FILTER (WHERE record_status = 0 AND mode_of_payment = 1), 0) as UpiSales,
                 COALESCE(SUM(amount) FILTER (WHERE record_status = 0 AND mode_of_payment = 2), 0) as CardSales,
                 COALESCE(SUM(cgst + sgst + igst) FILTER (WHERE record_status = 0), 0) as TotalTax
-            FROM invoices;
+            FROM invoices
+            WHERE 1=1
         ";
-        var salesRow = await conn.QueryFirstOrDefaultAsync(salesSql);
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            salesSql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
+        salesSql += ";";
+
+        var salesRow = await conn.QueryFirstOrDefaultAsync(salesSql, p);
         decimal totalSales = salesRow != null ? (decimal)(salesRow.totalsales ?? 0) : 0m;
         decimal cashSales = salesRow != null ? (decimal)(salesRow.cashsales ?? 0) : 0m;
         decimal upiSales = salesRow != null ? (decimal)(salesRow.upisales ?? 0) : 0m;
@@ -1643,14 +1888,19 @@ public class PosDbService
         int activeInvoices = salesRow != null ? (int)(salesRow.activeinvoices ?? 0) : 0;
         int invoiceCount = salesRow != null ? (int)(salesRow.totalinvoices ?? 0) : 0;
 
+        var prodSql = "SELECT id as Id, name as Name, product_number as ProductNumber, cost as Cost, is_exp_date as IsExpDate, days as Days, stock_quantity as StockQuantity FROM products WHERE record_status = 0";
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            prodSql += " AND store_id = @StoreId";
+        }
         var products = (await conn.QueryAsync<(string Id, string Name, string ProductNumber, decimal Cost, bool IsExpDate, int? Days, decimal StockQuantity)>(
-            "SELECT id as Id, name as Name, product_number as ProductNumber, cost as Cost, is_exp_date as IsExpDate, days as Days, stock_quantity as StockQuantity FROM products WHERE record_status = 0"
+            prodSql, p
         )).ToList();
         var lowStockCount = products.Count(p => p.StockQuantity < 20);
         var expiringCount = products.Count(p => p.IsExpDate && p.Days.HasValue && p.Days.Value <= 5);
         var expiredCount = products.Count(p => p.IsExpDate && p.Days.HasValue && p.Days.Value <= 0);
 
-        var recentInvoices = (await GetInvoicesAsync(null, null, null, null, "all")).Take(5);
+        var recentInvoices = (await GetInvoicesAsync(null, null, null, null, "all", storeId)).Take(5);
 
         return new
         {
@@ -1669,7 +1919,7 @@ public class PosDbService
         };
     }
 
-    public async Task<dynamic> GetDailySalesReportAsync(string? targetDate)
+    public async Task<dynamic> GetDailySalesReportAsync(string? targetDate, string? storeId = null)
     {
         using var conn = CreateConn();
         
@@ -1687,6 +1937,11 @@ public class PosDbService
         ";
 
         var p = new DynamicParameters();
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            sql += " AND store_id = @StoreId";
+            p.Add("StoreId", storeId.Trim());
+        }
         if (!string.IsNullOrWhiteSpace(targetDate))
         {
             sql += " AND TO_CHAR(date, 'YYYY-MM-DD') = @TargetDate";
@@ -1716,6 +1971,10 @@ public class PosDbService
         var totalTax = dailyBreakdown.Sum(d => d.TaxCollected);
 
         var invSql = "SELECT id as Id, document_number as DocumentNumber, date as Date, amount as Amount, mode_of_payment as ModeOfPayment, cgst as Cgst, sgst as Sgst, igst as Igst FROM invoices WHERE record_status = 0";
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            invSql += " AND store_id = @StoreId";
+        }
         if (!string.IsNullOrWhiteSpace(targetDate))
         {
             invSql += " AND TO_CHAR(date, 'YYYY-MM-DD') = @TargetDate";
@@ -1740,11 +1999,11 @@ public class PosDbService
         };
     }
 
-    public async Task<IEnumerable<dynamic>> GetVendorWiseSalesReportAsync()
+    public async Task<IEnumerable<dynamic>> GetVendorWiseSalesReportAsync(string? storeId = null)
     {
         using var conn = CreateConn();
         var vendors = (await GetVendorsAsync(null)).ToList();
-        var invoices = (await GetInvoicesAsync(null, null, null, null, "active")).ToList();
+        var invoices = (await GetInvoicesAsync(null, null, null, null, "active", storeId)).ToList();
 
         var result = new List<dynamic>();
         foreach (var v in vendors)
@@ -1784,10 +2043,17 @@ public class PosDbService
         return result;
     }
 
-    public async Task<IEnumerable<dynamic>> GetVendorWiseExpiredStockReportAsync()
+    public async Task<IEnumerable<dynamic>> GetVendorWiseExpiredStockReportAsync(string? storeId = null)
     {
         using var conn = CreateConn();
-        var products = (await conn.QueryAsync<Product>("SELECT * FROM products WHERE record_status = 0 AND is_exp_date = true")).ToList();
+        var pSql = "SELECT * FROM products WHERE record_status = 0 AND is_exp_date = true";
+        var pParam = new DynamicParameters();
+        if (!string.IsNullOrWhiteSpace(storeId))
+        {
+            pSql += " AND store_id = @StoreId";
+            pParam.Add("StoreId", storeId.Trim());
+        }
+        var products = (await conn.QueryAsync<Product>(pSql, pParam)).ToList();
         var vendors = (await GetVendorsAsync(null)).ToList();
 
         var list = new List<dynamic>();

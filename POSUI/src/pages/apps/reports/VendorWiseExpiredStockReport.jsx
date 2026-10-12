@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -38,6 +39,7 @@ import { exportToCsv } from '../../../utils/exportCsv';
 
 export default function VendorWiseExpiredStockReport() {
   const navigate = useNavigate();
+  const { activeStore } = useSelector(state => state.auth);
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -57,7 +59,7 @@ export default function VendorWiseExpiredStockReport() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [activeStore?.id]);
 
   // Aggregates
   const totalBatches = data.length;

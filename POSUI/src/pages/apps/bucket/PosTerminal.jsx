@@ -178,10 +178,11 @@ export default function PosTerminal() {
     fetchCustomers('');
   }, []);
 
-  // Load staged held buckets from PostgreSQL
+  // Load staged held buckets from PostgreSQL for current active store
   useEffect(() => {
     async function loadHeldBuckets() {
       try {
+        dispatch(clearAllHeldBuckets());
         const list = await bucketService.getBuckets();
         if (Array.isArray(list) && list.length > 0) {
           list.forEach(b => dispatch(addHeldBucket(b)));
@@ -191,9 +192,9 @@ export default function PosTerminal() {
       }
     }
     loadHeldBuckets();
-  }, []);
+  }, [activeStore?.id]);
 
-  // Load initial catalog and categories
+  // Load initial catalog and categories when component mounts or active store changes
   useEffect(() => {
     async function loadData() {
       const cats = await productService.getCategories();
@@ -202,9 +203,9 @@ export default function PosTerminal() {
       setProducts(prods);
     }
     loadData();
-  }, []);
+  }, [activeStore?.id]);
 
-  // Filter products when category or search changes
+  // Filter products when category, search query, or active store changes
   useEffect(() => {
     async function filterProds() {
       const prods = await productService.getProducts({
@@ -214,7 +215,7 @@ export default function PosTerminal() {
       setProducts(prods);
     }
     filterProds();
-  }, [selectedCategory, searchQuery]);
+  }, [selectedCategory, searchQuery, activeStore?.id]);
 
   // Global Keyboard Shortcuts (F1: guide, F2: search, F4: customer, F7: held, F8: hold, F9: checkout, F10/Alt+P: pay, Alt+C: clear, Esc: cancel)
   useEffect(() => {

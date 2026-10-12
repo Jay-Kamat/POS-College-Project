@@ -33,6 +33,8 @@ public class Product
     public decimal TaxPercent { get; set; } = 5;
     public string Unit { get; set; } = "PCS";
     public decimal StockQuantity { get; set; } = 50;
+    public string StoreId { get; set; } = "store_mum_01";
+    public string? StoreName { get; set; }
     public int RecordStatus { get; set; }
     public DateTime? Created { get; set; }
     public DateTime? Updated { get; set; }
@@ -161,8 +163,11 @@ public class InvoiceStatsDto
 public class CartLineItem
 {
     public string? Id { get; set; }
+    public string? ProductId { get; set; }
     public string? ProductNumber { get; set; }
+    public string? Barcode { get; set; }
     public string? Name { get; set; }
+    public string? ProductName { get; set; }
     public decimal? Rate { get; set; }
     public decimal? Cost { get; set; }
     public decimal Quantity { get; set; } = 1;

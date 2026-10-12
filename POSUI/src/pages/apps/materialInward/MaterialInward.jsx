@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -64,6 +65,7 @@ import { getUnitMeta } from '../../../utils/uomHelper';
 const steps = ['Receipt Mode & Vendor', 'Verify Quantities & Expiry', 'Generate & Print Barcodes'];
 
 export default function MaterialInward() {
+  const { activeStore } = useSelector(state => state.auth);
   const [currentTab, setCurrentTab] = useState(0); // 0: New Inward Wizard, 1: History List
   const [activeStep, setActiveStep] = useState(0);
   
@@ -156,7 +158,7 @@ export default function MaterialInward() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [activeStore?.id]);
 
   // Only POs with status 'Sent' that have not already been inwarded should be let in
   const availablePurchaseOrders = useMemo(() => {

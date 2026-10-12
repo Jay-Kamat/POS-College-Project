@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -45,6 +46,7 @@ import { exportToCsv } from '../../../utils/exportCsv';
 
 export default function DailySalesReport() {
   const navigate = useNavigate();
+  const { activeStore } = useSelector(state => state.auth);
   const [data, setData] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -73,7 +75,7 @@ export default function DailySalesReport() {
 
   useEffect(() => {
     loadData(selectedDate === 'ALL' ? '' : selectedDate);
-  }, [selectedDate]);
+  }, [selectedDate, activeStore?.id]);
 
   // Aggregate stats from data
   const totalRevenue = data.reduce((s, d) => s + Number(d.GrandTotal || 0), 0);

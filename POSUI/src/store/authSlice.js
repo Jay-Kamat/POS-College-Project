@@ -60,6 +60,9 @@ export const authSlice = createSlice({
       state.activeStore = action.payload;
       try {
         localStorage.setItem('pos_active_store', JSON.stringify(action.payload));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('pos_store_changed', { detail: action.payload }));
+        }
       } catch (e) {}
     },
     logout: (state) => {

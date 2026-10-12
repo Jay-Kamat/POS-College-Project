@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -57,6 +58,7 @@ import { formatQtyWithUnit } from '../../../utils/uomHelper';
 
 export default function InvoiceList() {
   const navigate = useNavigate();
+  const { activeStore } = useSelector(state => state.auth);
 
   // State
   const [invoices, setInvoices] = useState([]);
@@ -141,7 +143,7 @@ export default function InvoiceList() {
   useEffect(() => {
     loadData();
     setPage(0);
-  }, [search, statusFilter, paymentFilter, computedDates]);
+  }, [search, statusFilter, paymentFilter, computedDates, activeStore?.id]);
 
   // Actions
   const handleOpenCancel = (invoice, e) => {

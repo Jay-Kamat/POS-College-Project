@@ -15,17 +15,26 @@ public class BucketsController : ControllerBase
         _db = db;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetBuckets()
+    private string? ResolveStoreId(string? queryStoreId)
     {
-        var list = await _db.GetBucketsAsync();
+        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
+        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetBuckets([FromQuery] string? storeId)
+    {
+        var targetStoreId = ResolveStoreId(storeId);
+        var list = await _db.GetBucketsAsync(targetStoreId);
         return Ok(new { status = "success", data = list });
     }
 
     [HttpPost]
     public async Task<IActionResult> SaveBucket([FromBody] JsonElement bucket)
     {
-        var saved = await _db.SaveBucketAsync(bucket);
+        var targetStoreId = ResolveStoreId(null);
+        var saved = await _db.SaveBucketAsync(bucket, targetStoreId);
         return StatusCode(201, new { status = "success", data = saved });
     }
 

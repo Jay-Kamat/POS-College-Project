@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -55,6 +56,7 @@ import vendorService from '../../../_api/vendorService';
 import productService from '../../../_api/productService';
 
 export default function PurchaseOrderList() {
+  const { activeStore } = useSelector(state => state.auth);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [stats, setStats] = useState({
     TotalOrders: 0,
@@ -117,7 +119,7 @@ export default function PurchaseOrderList() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [activeStore?.id]);
 
   // Filtered List
   const filteredPOs = purchaseOrders.filter(po => {

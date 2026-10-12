@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS tax_rates (
 
 CREATE TABLE IF NOT EXISTS products (
   id VARCHAR(64) PRIMARY KEY,
-  product_number VARCHAR(64) UNIQUE NOT NULL,
+  product_number VARCHAR(64) NOT NULL,
   name VARCHAR(255) NOT NULL,
   cost NUMERIC(12, 2) NOT NULL,
   ingredients TEXT,
@@ -65,7 +65,10 @@ CREATE TABLE IF NOT EXISTS products (
   category_id VARCHAR(64) REFERENCES categories(id) ON DELETE SET NULL,
   tax_rate_id VARCHAR(64) REFERENCES tax_rates(id) ON DELETE SET NULL,
   tax_percent NUMERIC(5, 2) DEFAULT 5.0,
-  stock_quantity INT DEFAULT 0,
+  unit VARCHAR(32) DEFAULT 'PCS',
+  stock_quantity NUMERIC(14, 3) DEFAULT 0.0,
+  store_id VARCHAR(64) DEFAULT 'store_mum_01',
+  store_name VARCHAR(255) DEFAULT 'DailyMart Express (Mumbai)',
   record_status INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -73,8 +76,10 @@ CREATE TABLE IF NOT EXISTS products (
   updated_id VARCHAR(64)
 );
 
-CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(product_number);
-CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
+-- Compound Unique Index: product_number is unique per store outlet
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode_store ON products (product_number, store_id);
+CREATE INDEX IF NOT EXISTS idx_products_store ON products (store_id);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products (category_id);
 
 CREATE TABLE IF NOT EXISTS customers (
   id VARCHAR(64) PRIMARY KEY,
@@ -122,11 +127,15 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_store ON purchase_orders(store_id);
+
 CREATE TABLE IF NOT EXISTS material_inward (
   id VARCHAR(64) PRIMARY KEY,
   purchase_order_id VARCHAR(64),
   vendor_id VARCHAR(64) REFERENCES vendors(id) ON DELETE SET NULL,
   vendor_name VARCHAR(255) NOT NULL,
+  store_id VARCHAR(64) DEFAULT 'store_mum_01',
+  store_name VARCHAR(255) DEFAULT 'DailyMart Express (Mumbai)',
   date TIMESTAMPTZ DEFAULT NOW(),
   is_po_available BOOLEAN DEFAULT true,
   items JSONB DEFAULT '[]'::jsonb,
@@ -134,6 +143,8 @@ CREATE TABLE IF NOT EXISTS material_inward (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_material_inward_store ON material_inward(store_id);
 
 CREATE TABLE IF NOT EXISTS return_reasons (
   id VARCHAR(64) PRIMARY KEY,
@@ -157,6 +168,8 @@ CREATE TABLE IF NOT EXISTS material_returns (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_material_returns_store ON material_returns(store_id);
+
 CREATE TABLE IF NOT EXISTS staged_buckets (
   id VARCHAR(64) PRIMARY KEY,
   bucket_number VARCHAR(64) NOT NULL,
@@ -165,9 +178,13 @@ CREATE TABLE IF NOT EXISTS staged_buckets (
   total NUMERIC(12, 2) DEFAULT 0.0,
   cart_data JSONB NOT NULL,
   timestamp VARCHAR(32),
+  store_id VARCHAR(64) DEFAULT 'store_mum_01',
+  store_name VARCHAR(255) DEFAULT 'DailyMart Express (Mumbai)',
   record_status INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_staged_buckets_store ON staged_buckets(store_id);
 
 CREATE TABLE IF NOT EXISTS invoices (
   id VARCHAR(64) PRIMARY KEY,
@@ -176,15 +193,15 @@ CREATE TABLE IF NOT EXISTS invoices (
   customer_id VARCHAR(64),
   customer_name VARCHAR(255),
   mobile_number VARCHAR(32),
-  store_id VARCHAR(64),
-  store_name VARCHAR(255),
+  store_id VARCHAR(64) DEFAULT 'store_mum_01',
+  store_name VARCHAR(255) DEFAULT 'DailyMart Express (Mumbai)',
   subtotal NUMERIC(12, 2) NOT NULL,
   cgst NUMERIC(12, 2) DEFAULT 0.0,
   sgst NUMERIC(12, 2) DEFAULT 0.0,
   igst NUMERIC(12, 2) DEFAULT 0.0,
   round_off NUMERIC(8, 2) DEFAULT 0.0,
   amount NUMERIC(12, 2) NOT NULL,
-  mode_of_payment INT DEFAULT 0,
+  mode_of_payment INT DEFAULT 0, -- 0 = Cash, 1 = UPI
   is_payment_received BOOLEAN DEFAULT true,
   is_share_receipt_through_sms BOOLEAN DEFAULT false,
   cancellation_reason TEXT,
@@ -198,6 +215,7 @@ CREATE TABLE IF NOT EXISTS invoices (
 
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date DESC);
 CREATE INDEX IF NOT EXISTS idx_invoices_docnum ON invoices(document_number);
+CREATE INDEX IF NOT EXISTS idx_invoices_store ON invoices(store_id);
 
 CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(64) PRIMARY KEY,
@@ -233,9 +251,15 @@ CREATE TABLE IF NOT EXISTS __migrations_history (
 -- 2. Seed Initial Master Data
 -- -------------------------------------------------------------
 
-INSERT INTO stores (id, name, long_name, address, mobile_number, phone_number, email, food_license_number, gst_number, state)
-VALUES ('store_mum_01', 'DailyMart Express', 'DailyMart Retail Private Limited', 'Plot 12, Commercial Hub, MG Road, Mumbai', '+91 98765 43210', '022-28765432', 'mumbai01@dailymart.in', '11522001000123', '27AABCU9603R1ZM', 'Maharashtra')
-ON CONFLICT (id) DO NOTHING;
+-- Multi-Store Outlets
+INSERT INTO stores (id, name, long_name, address, mobile_number, phone_number, email, food_license_number, gst_number, state, invoice_prefix) VALUES
+('store_mum_01', 'DailyMart Express (Mumbai)', 'DailyMart Retail Private Limited', 'Plot 12, Commercial Hub, MG Road, Mumbai', '+91 98765 43210', '022-28765432', 'mumbai01@dailymart.in', '11522001000123', '27AABCU9603R1ZM', 'Maharashtra', 'MUM'),
+('store_pune_02', 'DailyMart Supercenter (Pune)', 'DailyMart Retail Pune Pvt Ltd', 'Shop 4-8, Phoenix Mall, Viman Nagar, Pune', '+91 98230 11223', '020-66778899', 'pune.viman@dailymart.in', '11522001000456', '27AABCU9603R1ZM', 'Maharashtra', 'PUN'),
+('store_blr_03', 'DailyMart Hypermarket (Bengaluru)', 'DailyMart South India Retail Ltd', 'Tower B, Outer Ring Road, Bellandur, Bengaluru', '+91 98450 33445', '080-44556677', 'blr.bellandur@dailymart.in', '11522001000789', '29AABCU9603R1ZL', 'Karnataka', 'BLR')
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  invoice_prefix = EXCLUDED.invoice_prefix,
+  state = EXCLUDED.state;
 
 INSERT INTO categories (id, name) VALUES
 ('cat_all', 'All Items'),
@@ -254,16 +278,35 @@ INSERT INTO tax_rates (id, name, igst, cgst, sgst) VALUES
 ('tax_28', 'GST 28% Luxury', 28.0, 14.0, 14.0)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO products (id, product_number, name, cost, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, stock_quantity) VALUES
-('prd_01', '200100101001', 'Cow Milk 500ml', 30.00, 'Pasteurized Cow Milk', 'Keep refrigerated below 4°C', true, 3, 'cat_dairy', 'tax_5', 5, 45),
-('prd_02', '200100102002', 'Whole Wheat Bread 400g', 40.00, 'Whole wheat flour, yeast, water', 'Fresh daily bake', true, 5, 'cat_bakery', 'tax_0', 0, 28),
-('prd_03', '200100103003', 'Cold Coffee 200ml', 45.00, 'Milk, Arabica coffee beans, sugar', 'Ready to drink chilled', true, 30, 'cat_bev', 'tax_18', 18, 19),
-('prd_04', '200100104004', 'Royal Basmati Rice 1kg', 110.00, 'Aged Long Grain Basmati', 'Grade A premium rice', false, NULL, 'cat_staples', 'tax_5', 5, 60),
-('prd_05', '200100105005', 'Dark Chocolate Cake 500g', 350.00, 'Cocoa, dark chocolate, flour, sugar', 'Eggless celebration cake', true, 2, 'cat_bakery', 'tax_18', 18, 12),
-('prd_06', '200100106006', 'Masala Potato Chips 100g', 20.00, 'Potatoes, edible oil, spices', 'Crispy fried snack', true, 60, 'cat_snacks', 'tax_12', 12, 50),
-('prd_07', '200100107007', 'Fresh Butter 200g', 65.00, 'Cream, salt', 'Store refrigerated', true, 45, 'cat_dairy', 'tax_12', 12, 34),
-('prd_08', '200100108008', 'Green Tea Bags 25s', 140.00, 'Natural green tea leaves', 'Antioxidant rich', true, 180, 'cat_bev', 'tax_5', 5, 22)
-ON CONFLICT (id) DO NOTHING;
+-- Mumbai Store Catalog (store_mum_01)
+INSERT INTO products (id, product_number, name, cost, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, unit, stock_quantity, store_id, store_name) VALUES
+('prd_01', '200100101001', 'Cow Milk 500ml', 30.00, 'Pasteurized Cow Milk', 'Keep refrigerated below 4°C', true, 3, 'cat_dairy', 'tax_5', 5, 'PACK', 34.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_02', '200100102002', 'Whole Wheat Bread 400g', 40.00, 'Whole wheat flour, yeast, water', 'Fresh daily bake', true, 5, 'cat_bakery', 'tax_0', 0, 'PACK', 122.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_03', '200100103003', 'Cold Coffee 200ml', 45.00, 'Milk, Arabica coffee beans, sugar', 'Ready to drink chilled', true, 30, 'cat_bev', 'tax_18', 18, 'BTL', 14.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_04', '200100104004', 'Royal Basmati Rice 1kg', 110.00, 'Aged Long Grain Basmati', 'Grade A premium rice', false, NULL, 'cat_staples', 'tax_5', 5, 'KG', 60.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_05', '200100105005', 'Dark Chocolate Cake 500g', 350.00, 'Cocoa, dark chocolate, flour, sugar', 'Eggless celebration cake', true, 2, 'cat_bakery', 'tax_18', 18, 'PACK', 12.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_06', '200100106006', 'Masala Potato Chips 100g', 20.00, 'Potatoes, edible oil, spices', 'Crispy fried snack', true, 60, 'cat_snacks', 'tax_12', 12, 'PACK', 57.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_07', '200100107007', 'Fresh Butter 200g', 65.00, 'Cream, salt', 'Store refrigerated', true, 45, 'cat_dairy', 'tax_12', 12, 'PACK', 31.000, 'store_mum_01', 'DailyMart Express (Mumbai)'),
+('prd_08', '200100108008', 'Green Tea Bags 25s', 140.00, 'Natural green tea leaves', 'Antioxidant rich', true, 180, 'cat_bev', 'tax_5', 5, 'BOX', 18.000, 'store_mum_01', 'DailyMart Express (Mumbai)')
+ON CONFLICT (product_number, store_id) DO NOTHING;
+
+-- Pune Store Catalog (store_pune_02)
+INSERT INTO products (id, product_number, name, cost, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, unit, stock_quantity, store_id, store_name) VALUES
+('prd_pune_01', '200100101001', 'Cow Milk 500ml Pouch (Pune)', 32.00, 'Pasteurized Cow Milk', 'Keep refrigerated below 4°C', true, 3, 'cat_dairy', 'tax_5', 5, 'PACK', 16.000, 'store_pune_02', 'DailyMart Supercenter (Pune)'),
+('prd_pune_02', '200100102002', 'Whole Wheat Bread 400g', 42.00, 'Whole wheat flour, yeast, water', 'Fresh daily bake', true, 5, 'cat_bakery', 'tax_0', 0, 'PACK', 12.000, 'store_pune_02', 'DailyMart Supercenter (Pune)'),
+('prd_pune_03', '200100103003', 'Cold Coffee 200ml', 35.00, 'Milk, Arabica coffee beans, sugar', 'Ready to drink chilled', true, 30, 'cat_bev', 'tax_18', 18, 'BTL', 8.000, 'store_pune_02', 'DailyMart Supercenter (Pune)'),
+('prd_pune_04', '200100104004', 'Royal Basmati Rice 1kg', 110.00, 'Aged Long Grain Basmati', 'Grade A premium rice', false, NULL, 'cat_staples', 'tax_5', 5, 'KG', 40.000, 'store_pune_02', 'DailyMart Supercenter (Pune)'),
+('prd_pune_06', '200100106006', 'Masala Potato Chips 100g', 20.00, 'Potatoes, edible oil, spices', 'Crispy fried snack', true, 60, 'cat_snacks', 'tax_12', 12, 'PACK', 25.000, 'store_pune_02', 'DailyMart Supercenter (Pune)'),
+('prd_pune_07', '200100107007', 'Fresh Butter 200g', 65.00, 'Cream, salt', 'Store refrigerated', true, 45, 'cat_dairy', 'tax_12', 12, 'PACK', 15.000, 'store_pune_02', 'DailyMart Supercenter (Pune)')
+ON CONFLICT (product_number, store_id) DO NOTHING;
+
+-- Bengaluru Store Catalog (store_blr_03)
+INSERT INTO products (id, product_number, name, cost, ingredients, notes, is_exp_date, days, category_id, tax_rate_id, tax_percent, unit, stock_quantity, store_id, store_name) VALUES
+('prd_blr_01', '200100101001', 'Cow Milk 500ml (Bengaluru)', 30.00, 'Pasteurized Cow Milk', 'Keep refrigerated below 4°C', true, 3, 'cat_dairy', 'tax_5', 5, 'PACK', 20.000, 'store_blr_03', 'DailyMart Hypermarket (Bengaluru)'),
+('prd_blr_02', '200100102002', 'Whole Wheat Bread 400g (Bengaluru)', 40.00, 'Whole wheat flour, yeast, water', 'Fresh daily bake', true, 5, 'cat_bakery', 'tax_0', 0, 'PACK', 30.000, 'store_blr_03', 'DailyMart Hypermarket (Bengaluru)'),
+('prd_blr_03', '200100103003', 'Cold Coffee 200ml (Bengaluru)', 45.00, 'Milk, Arabica coffee beans, sugar', 'Ready to drink chilled', true, 30, 'cat_bev', 'tax_18', 18, 'BTL', 15.000, 'store_blr_03', 'DailyMart Hypermarket (Bengaluru)'),
+('prd_blr_04', '200100104004', 'Royal Basmati Rice 1kg (Bengaluru)', 110.00, 'Aged Long Grain Basmati', 'Grade A premium rice', false, NULL, 'cat_staples', 'tax_5', 5, 'KG', 50.000, 'store_blr_03', 'DailyMart Hypermarket (Bengaluru)')
+ON CONFLICT (product_number, store_id) DO NOTHING;
 
 INSERT INTO customers (id, name, mobile_number, gst_number, state, country, total_visits, total_spend) VALUES
 ('cust_01', 'Jay Sharma', '9876543210', '', 'Maharashtra', 'India', 14, 4250.00),
@@ -291,8 +334,8 @@ INSERT INTO purchase_orders (id, document_number, vendor_id, vendor_name, store_
 ('po_03', 'PO-2026-00047', 'vnd_03', 'Royal Agro Commodities Pvt Ltd', 'store_mum_01', 'Sent', 9500.00, '[{"ProductId": "prd_04", "ProductName": "Royal Basmati Rice 1kg", "Quantity": 100, "Rate": 95.00, "DeliveryDate": "2026-10-08"}]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO material_inward (id, purchase_order_id, vendor_id, vendor_name, is_po_available, items) VALUES
-('inw_01', 'po_01', 'vnd_01', 'Fresh Dairy Co-operative Ltd', true, '[{"ProductId": "prd_01", "ProductName": "Cow Milk 500ml", "OrderedQty": 100, "ReceivedQty": 100, "Rate": 26.00, "ExpiryDate": "2026-10-07", "Barcode": "200100101001"}]'::jsonb)
+INSERT INTO material_inward (id, purchase_order_id, vendor_id, vendor_name, store_id, store_name, is_po_available, items) VALUES
+('inw_01', 'po_01', 'vnd_01', 'Fresh Dairy Co-operative Ltd', 'store_mum_01', 'DailyMart Express (Mumbai)', true, '[{"ProductId": "prd_01", "ProductName": "Cow Milk 500ml", "OrderedQty": 100, "ReceivedQty": 100, "Rate": 26.00, "ExpiryDate": "2026-10-07", "Barcode": "200100101001"}]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO material_returns (id, document_number, vendor_id, vendor_name, store_id, material_return_id, return_reason, total_return_amount, status, items) VALUES
@@ -301,8 +344,8 @@ INSERT INTO material_returns (id, document_number, vendor_id, vendor_name, store
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO invoices (id, document_number, customer_id, customer_name, mobile_number, store_id, store_name, subtotal, cgst, sgst, igst, round_off, amount, mode_of_payment, is_payment_received, is_share_receipt_through_sms, items) VALUES
-('inv_101', 'INV-2627-000101', 'cust_01', 'Jay Sharma', '9876543210', 'store_mum_01', 'DailyMart Express', 145.00, 4.88, 4.88, 0.00, 0.24, 155.00, 1, true, true, '[{"ProductId": "prd_01", "ProductName": "Cow Milk 500ml", "Quantity": 2, "Rate": 30.00, "Cgst": 1.50, "Sgst": 1.50, "Total": 63.00}, {"ProductId": "prd_03", "ProductName": "Cold Coffee 200ml", "Quantity": 2, "Rate": 45.00, "Cgst": 4.05, "Sgst": 4.05, "Total": 98.10}]'::jsonb),
-('inv_102', 'INV-2627-000102', 'cust_02', 'Priya Patel', '9820011223', 'store_mum_01', 'DailyMart Express', 350.00, 31.50, 31.50, 0.00, 0.00, 413.00, 0, true, false, '[{"ProductId": "prd_05", "ProductName": "Dark Chocolate Cake 500g", "Quantity": 1, "Rate": 350.00, "Cgst": 31.50, "Sgst": 31.50, "Total": 413.00}]'::jsonb)
+('inv_101', 'INV-2627-000101', 'cust_01', 'Jay Sharma', '9876543210', 'store_mum_01', 'DailyMart Express (Mumbai)', 145.00, 4.88, 4.88, 0.00, 0.24, 155.00, 1, true, true, '[{"ProductId": "prd_01", "ProductName": "Cow Milk 500ml", "Quantity": 2, "Rate": 30.00, "Cgst": 1.50, "Sgst": 1.50, "Total": 63.00}, {"ProductId": "prd_03", "ProductName": "Cold Coffee 200ml", "Quantity": 2, "Rate": 45.00, "Cgst": 4.05, "Sgst": 4.05, "Total": 98.10}]'::jsonb),
+('inv_102', 'INV-2627-000102', 'cust_02', 'Priya Patel', '9820011223', 'store_mum_01', 'DailyMart Express (Mumbai)', 350.00, 31.50, 31.50, 0.00, 0.00, 413.00, 0, true, false, '[{"ProductId": "prd_05", "ProductName": "Dark Chocolate Cake 500g", "Quantity": 1, "Rate": 350.00, "Cgst": 31.50, "Sgst": 31.50, "Total": 413.00}]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO users (id, name, email, role, store, status, last_login) VALUES

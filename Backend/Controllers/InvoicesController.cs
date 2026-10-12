@@ -20,17 +20,32 @@ public class InvoicesController : ControllerBase
         _db = db;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetInvoices([FromQuery] string? startDate, [FromQuery] string? endDate, [FromQuery] string? search, [FromQuery] int? paymentMode, [FromQuery] string? status)
+    private string? ResolveStoreId(string? queryStoreId)
     {
-        var list = (await _db.GetInvoicesAsync(startDate, endDate, search, paymentMode, status)).ToList();
+        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
+        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetInvoices(
+        [FromQuery] string? startDate, 
+        [FromQuery] string? endDate, 
+        [FromQuery] string? search, 
+        [FromQuery] int? paymentMode, 
+        [FromQuery] string? status,
+        [FromQuery] string? storeId)
+    {
+        var targetStoreId = ResolveStoreId(storeId);
+        var list = (await _db.GetInvoicesAsync(startDate, endDate, search, paymentMode, status, targetStoreId)).ToList();
         return Ok(new { status = "success", count = list.Count, data = list });
     }
 
     [HttpGet("stats")]
-    public async Task<IActionResult> GetInvoiceStats()
+    public async Task<IActionResult> GetInvoiceStats([FromQuery] string? storeId)
     {
-        var stats = await _db.GetInvoiceStatsAsync();
+        var targetStoreId = ResolveStoreId(storeId);
+        var stats = await _db.GetInvoiceStatsAsync(targetStoreId);
         return Ok(new { status = "success", data = stats });
     }
 
@@ -49,6 +64,16 @@ public class InvoicesController : ControllerBase
     {
         if (req?.Cart == null || req.Cart.Items == null || req.Cart.Items.Count == 0)
             return BadRequest(new { status = "error", message = "Cannot generate invoice for an empty cart" });
+
+        var targetStoreId = ResolveStoreId(null);
+        if (req.ActiveStore == null && !string.IsNullOrWhiteSpace(targetStoreId))
+        {
+            req.ActiveStore = new Store { Id = targetStoreId };
+        }
+        else if (req.ActiveStore != null && string.IsNullOrWhiteSpace(req.ActiveStore.Id) && !string.IsNullOrWhiteSpace(targetStoreId))
+        {
+            req.ActiveStore.Id = targetStoreId;
+        }
 
         try
         {

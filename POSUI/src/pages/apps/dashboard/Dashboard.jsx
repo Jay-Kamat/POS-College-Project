@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Grid,
@@ -39,6 +40,7 @@ import reportService from '../../../_api/reportService';
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { activeStore } = useSelector(state => state.auth);
   const [loading, setLoading] = useState(true);
   const [kpis, setKpis] = useState({
     totalSales: 0,
@@ -109,7 +111,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+  }, [activeStore?.id]);
 
   const totalSalesVal = Number(kpis.totalSales || 0);
   const totalInvoicesCount = Number(kpis.invoiceCount || 0);

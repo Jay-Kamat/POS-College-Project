@@ -16,6 +16,13 @@ public class MaterialReturnsController : ControllerBase
         _db = db;
     }
 
+    private string? ResolveStoreId(string? queryStoreId)
+    {
+        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
+        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+    }
+
     [HttpGet("reasons")]
     public async Task<IActionResult> GetReturnReasons()
     {
@@ -24,16 +31,22 @@ public class MaterialReturnsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetMaterialReturns([FromQuery] string? reasonId, [FromQuery] string? vendorId, [FromQuery] string? search)
+    public async Task<IActionResult> GetMaterialReturns(
+        [FromQuery] string? reasonId, 
+        [FromQuery] string? vendorId, 
+        [FromQuery] string? search,
+        [FromQuery] string? storeId)
     {
-        var list = await _db.GetMaterialReturnsAsync(reasonId, vendorId, search);
+        var targetStoreId = ResolveStoreId(storeId);
+        var list = await _db.GetMaterialReturnsAsync(reasonId, vendorId, search, targetStoreId);
         return Ok(list);
     }
 
     [HttpGet("stats")]
-    public async Task<IActionResult> GetMaterialReturnStats()
+    public async Task<IActionResult> GetMaterialReturnStats([FromQuery] string? storeId)
     {
-        var stats = await _db.GetMaterialReturnStatsAsync();
+        var targetStoreId = ResolveStoreId(storeId);
+        var stats = await _db.GetMaterialReturnStatsAsync(targetStoreId);
         return Ok(new { status = "success", data = stats });
     }
 
@@ -50,7 +63,8 @@ public class MaterialReturnsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateMaterialReturn([FromBody] JsonElement body)
     {
-        var created = await _db.CreateMaterialReturnAsync(body);
+        var targetStoreId = ResolveStoreId(null);
+        var created = await _db.CreateMaterialReturnAsync(body, targetStoreId);
         return StatusCode(201, created);
     }
 

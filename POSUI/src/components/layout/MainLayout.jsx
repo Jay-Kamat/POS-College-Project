@@ -19,7 +19,20 @@ import {
   MenuItem,
   Avatar,
   Tooltip,
-  Badge
+  Badge,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Grid,
+  FormControl,
+  InputLabel,
+  Select,
+  Button,
+  Snackbar,
+  Alert,
+  CircularProgress
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -36,12 +49,20 @@ import {
   WhatsApp as WhatsAppIcon,
   ChevronLeft as ChevronLeftIcon,
   KeyboardArrowDown as ArrowDownIcon,
-  Lock as LockIcon
+  Lock as LockIcon,
+  AddCircleOutline as AddIcon
 } from '@mui/icons-material';
 import { setRole, setActiveStore } from '../../store/authSlice';
 import settingService from '../../_api/settingService';
 
 const DRAWER_WIDTH = 250;
+
+const INDIAN_STATES = [
+  'Maharashtra', 'Gujarat', 'Karnataka', 'Delhi', 'Tamil Nadu',
+  'Telangana', 'Rajasthan', 'Uttar Pradesh', 'West Bengal', 'Kerala',
+  'Madhya Pradesh', 'Punjab', 'Haryana', 'Bihar', 'Odisha', 'Goa',
+  'Andhra Pradesh', 'Assam'
+];
 
 export default function MainLayout() {
   const navigate = useNavigate();
@@ -53,6 +74,74 @@ export default function MainLayout() {
   const [roleAnchor, setRoleAnchor] = useState(null);
   const [storeAnchor, setStoreAnchor] = useState(null);
   const [availableStores, setAvailableStores] = useState([]);
+
+  // Create New Outlet Dialog State
+  const [createOutletOpen, setCreateOutletOpen] = useState(false);
+  const [creatingStore, setCreatingStore] = useState(false);
+  const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
+  const [newStore, setNewStore] = useState({
+    Name: '',
+    LongName: '',
+    Address: '',
+    State: 'Maharashtra',
+    Country: 'India',
+    GstNumber: '',
+    FoodLicenseNumber: '',
+    MobileNumber: '',
+    PhoneNumber: '',
+    Email: '',
+    InvoicePrefix: 'INV',
+    ReceiptFooterText: 'Thank you for shopping with us! No exchange after 7 days.',
+    PaperSize: '80mm'
+  });
+
+  const handleCreateOutlet = async () => {
+    if (!newStore.Name.trim()) {
+      setToast({ open: true, message: 'Display Store Name is required.', severity: 'warning' });
+      return;
+    }
+    setCreatingStore(true);
+    try {
+      const created = await settingService.createStore({
+        ...newStore,
+        Id: `store_${Date.now()}`
+      });
+      setCreateOutletOpen(false);
+      setNewStore({
+        Name: '',
+        LongName: '',
+        Address: '',
+        State: 'Maharashtra',
+        Country: 'India',
+        GstNumber: '',
+        FoodLicenseNumber: '',
+        MobileNumber: '',
+        PhoneNumber: '',
+        Email: '',
+        InvoicePrefix: 'INV',
+        ReceiptFooterText: 'Thank you for shopping with us! No exchange after 7 days.',
+        PaperSize: '80mm'
+      });
+      const updatedList = await settingService.getStores();
+      setAvailableStores(updatedList || []);
+      if (created) {
+        dispatch(setActiveStore({
+          id: created.Id || created.id,
+          name: created.Name || created.name,
+          address: created.Address || created.address,
+          state: created.State || created.state,
+          gstin: created.GstNumber || created.gstNumber,
+          fssai: created.FoodLicenseNumber || created.foodLicenseNumber,
+          phone: created.MobileNumber || created.mobileNumber
+        }));
+      }
+      setToast({ open: true, message: `New store outlet "${created.Name || newStore.Name}" registered and switched!`, severity: 'success' });
+    } catch (err) {
+      setToast({ open: true, message: 'Failed to create new store outlet: ' + err.message, severity: 'error' });
+    } finally {
+      setCreatingStore(false);
+    }
+  };
 
   useEffect(() => {
     async function loadStores() {
@@ -192,6 +281,18 @@ export default function MainLayout() {
                       </MenuItem>
                     );
                   })}
+                  <Divider sx={{ my: 0.5 }} />
+                  <MenuItem 
+                    onClick={() => { setStoreAnchor(null); setCreateOutletOpen(true); }}
+                    sx={{ color: '#2563EB', fontWeight: 700, py: 1 }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <AddIcon sx={{ fontSize: 20 }} />
+                      <Typography variant="body2" sx={{ fontWeight: 700, color: '#2563EB' }}>
+                        + Register New Store Outlet
+                      </Typography>
+                    </Box>
+                  </MenuItem>
                 </Menu>
               </>
             ) : (
@@ -335,6 +436,155 @@ export default function MainLayout() {
         <Toolbar />
         <Outlet />
       </Box>
+
+      {/* Admin Quick Create Store Outlet Modal */}
+      <Dialog
+        open={createOutletOpen}
+        onClose={() => setCreateOutletOpen(false)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3, p: 1 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 800, fontSize: '1.25rem', color: '#1E293B', pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{ bgcolor: '#EFF6FF', p: 1, borderRadius: 2, display: 'flex', color: '#2563EB' }}>
+              <StoreIcon />
+            </Box>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 800 }}>Register New Store Outlet</Typography>
+              <Typography variant="caption" sx={{ color: '#64748B' }}>
+                Create a fully isolated store outlet with independent inventory, barcodes, and billing records
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers sx={{ pt: 2 }}>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Store Display Name *"
+                placeholder="e.g. DailyMart Express (Ahmedabad)"
+                value={newStore.Name}
+                onChange={(e) => setNewStore({ ...newStore, Name: e.target.value })}
+                size="small"
+                helperText="Public outlet brand title"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Legal Business Name"
+                placeholder="e.g. DailyMart Retail Private Limited"
+                value={newStore.LongName}
+                onChange={(e) => setNewStore({ ...newStore, LongName: e.target.value })}
+                size="small"
+                helperText="Entity title printed on tax invoices"
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Store Physical Address *"
+                placeholder="Shop 104, City Mall, Ring Road, Ahmedabad"
+                value={newStore.Address}
+                onChange={(e) => setNewStore({ ...newStore, Address: e.target.value })}
+                size="small"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth size="small">
+                <InputLabel>State (GST State)</InputLabel>
+                <Select
+                  value={newStore.State}
+                  label="State (GST State)"
+                  onChange={(e) => setNewStore({ ...newStore, State: e.target.value })}
+                >
+                  {INDIAN_STATES.map((st) => (
+                    <MenuItem key={st} value={st}>{st}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="GSTIN (15 Digits)"
+                placeholder="24AABCU9603R1Z9"
+                value={newStore.GstNumber}
+                onChange={(e) => setNewStore({ ...newStore, GstNumber: e.target.value.toUpperCase() })}
+                size="small"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="FSSAI License Number"
+                placeholder="11522001000999"
+                value={newStore.FoodLicenseNumber}
+                onChange={(e) => setNewStore({ ...newStore, FoodLicenseNumber: e.target.value })}
+                size="small"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Invoice Prefix"
+                placeholder="INV-AMD"
+                value={newStore.InvoicePrefix}
+                onChange={(e) => setNewStore({ ...newStore, InvoicePrefix: e.target.value.toUpperCase() })}
+                size="small"
+                helperText="E.g. INV-AMD gives INV-AMD-00001"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Store Mobile Number"
+                placeholder="+91 98765 12345"
+                value={newStore.MobileNumber}
+                onChange={(e) => setNewStore({ ...newStore, MobileNumber: e.target.value })}
+                size="small"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Official Store Email"
+                placeholder="outlet.ahmedabad@dailymart.in"
+                value={newStore.Email}
+                onChange={(e) => setNewStore({ ...newStore, Email: e.target.value })}
+                size="small"
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={() => setCreateOutletOpen(false)} color="inherit">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleCreateOutlet}
+            variant="contained"
+            disabled={creatingStore || !newStore.Name.trim()}
+            sx={{ bgcolor: '#2563EB', '&:hover': { bgcolor: '#1D4ED8' }, fontWeight: 700 }}
+          >
+            {creatingStore ? <CircularProgress size={20} color="inherit" /> : 'Register & Switch Outlet'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Toast Feedback */}
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4000}
+        onClose={() => setToast({ ...toast, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert severity={toast.severity} onClose={() => setToast({ ...toast, open: false })} sx={{ width: '100%', fontWeight: 600 }}>
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

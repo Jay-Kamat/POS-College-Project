@@ -16,17 +16,26 @@ public class MaterialInwardController : ControllerBase
         _db = db;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetMaterialInward()
+    private string? ResolveStoreId(string? queryStoreId)
     {
-        var list = await _db.GetMaterialInwardAsync();
+        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
+        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetMaterialInward([FromQuery] string? storeId)
+    {
+        var targetStoreId = ResolveStoreId(storeId);
+        var list = await _db.GetMaterialInwardAsync(targetStoreId);
         return Ok(list);
     }
 
     [HttpGet("stats")]
-    public async Task<IActionResult> GetMaterialInwardStats()
+    public async Task<IActionResult> GetMaterialInwardStats([FromQuery] string? storeId)
     {
-        var stats = await _db.GetMaterialInwardStatsAsync();
+        var targetStoreId = ResolveStoreId(storeId);
+        var stats = await _db.GetMaterialInwardStatsAsync(targetStoreId);
         return Ok(new { status = "success", data = stats });
     }
 
@@ -45,7 +54,8 @@ public class MaterialInwardController : ControllerBase
     {
         try
         {
-            var created = await _db.CreateMaterialInwardAsync(body);
+            var targetStoreId = ResolveStoreId(null);
+            var created = await _db.CreateMaterialInwardAsync(body, targetStoreId);
             return StatusCode(201, created);
         }
         catch (InvalidOperationException ex)

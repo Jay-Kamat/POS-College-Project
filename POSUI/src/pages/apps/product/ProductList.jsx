@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Paper,
@@ -72,6 +73,7 @@ const validationSchema = Yup.object({
 });
 
 export default function ProductList() {
+  const { activeStore } = useSelector(state => state.auth);
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [stats, setStats] = useState({
@@ -120,7 +122,7 @@ export default function ProductList() {
 
   useEffect(() => {
     loadData();
-  }, [selectedCat, search]);
+  }, [selectedCat, search, activeStore?.id]);
 
   // Formik for Add/Edit
   const formik = useFormik({
