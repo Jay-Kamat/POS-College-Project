@@ -35,6 +35,8 @@ auth_info_baileys/
 # Node Dependencies
 node_modules/
 **/node_modules/
+POSUI/node_modules/
+OpenWA/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
