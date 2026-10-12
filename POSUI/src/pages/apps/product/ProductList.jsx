@@ -55,6 +55,7 @@ import { useFormik } from 'formik';
 import * as Yup from 'yup';
 import { QRCodeSVG } from 'qrcode.react';
 import productService from '../../../_api/productService';
+import { printBarcodeLabels } from '../../../utils/printService';
 import { UNITS, getUnitMeta, formatRatePerUnit, formatQtyWithUnit } from '../../../utils/uomHelper';
 
 const validationSchema = Yup.object({
@@ -282,7 +283,23 @@ export default function ProductList() {
 
   // Thermal label print handler
   const handlePrintLabel = () => {
-    window.print();
+    if (!labelProduct) return;
+    printBarcodeLabels([{
+      ProductId: labelProduct.Id,
+      ProductName: labelProduct.Name,
+      Barcode: labelProduct.ProductNumber || labelProduct.Id,
+      Rate: labelProduct.Cost || 0,
+      Mrp: labelProduct.Cost || 0,
+      ExpiryDate: labelProduct.IsExpDate ? new Date(Date.now() + (labelProduct.Days || 3) * 86400000).toISOString().slice(0, 10) : 'Non-perishable',
+      Unit: getUnitMeta(labelProduct.Unit).short || 'PCS',
+      QrPayload: JSON.stringify({
+        barcode: labelProduct.ProductNumber || labelProduct.Id,
+        id: labelProduct.Id,
+        name: labelProduct.Name,
+        mrp: Number(labelProduct.Cost || 0),
+        tax: Number(labelProduct.TaxPercent || 0)
+      })
+    }], { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' });
   };
 
   return (

@@ -734,37 +734,36 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
 
   if (unitLabels.length === 0) return;
 
-  // 2. Generate vector SVG for each unit's QR code & Barcode
+  // 2. Generate vector / high-res QR code for each unit's exact product payload
   const cardsHtml = await Promise.all(unitLabels.map(async (unit) => {
-    let qrSvg = '';
+    let qrElement = '';
+    const qrData = unit.QrPayload || unit.Serial || unit.Barcode;
+
     try {
-      qrSvg = await QRCode.toString(unit.QrPayload || unit.Serial || unit.Barcode, {
-        type: 'svg',
-        margin: 0,
+      const qrDataUrl = await QRCode.toDataURL(qrData, {
         errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 320,
         color: { dark: '#000000', light: '#ffffff' }
       });
+      qrElement = `<img src="${qrDataUrl}" class="qr-img" alt="QR Code" />`;
     } catch (e) {
-      qrSvg = `<div style="font-size:9px;color:#dc2626;padding:4px;">QR Error</div>`;
-    }
-
-    let barcodeSvg = '';
-    try {
-      const svgNode = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      JsBarcode(svgNode, unit.Serial || unit.Barcode, {
-        format: 'CODE128',
-        width: 1.25,
-        height: 26,
-        displayValue: false,
-        margin: 0
-      });
-      barcodeSvg = svgNode.outerHTML;
-    } catch (e) {
-      barcodeSvg = '';
+      try {
+        const qrSvg = await QRCode.toString(qrData, {
+          type: 'svg',
+          margin: 1,
+          errorCorrectionLevel: 'M',
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+        qrElement = `<div class="qr-svg-wrap">${qrSvg}</div>`;
+      } catch (err2) {
+        qrElement = `<div class="qr-err">QR Code Error</div>`;
+      }
     }
 
     const mrp = unit.Mrp ? Number(unit.Mrp).toFixed(2) : (Number(unit.Rate || 0) * 1.3).toFixed(2);
-    const unitBadge = unit.TotalUnits ? `PKT ${unit.UnitIndex}/${unit.TotalUnits}` : 'UNIT 1/1';
+    const unitBadge = unit.TotalUnits ? `Packet ${unit.UnitIndex} of ${unit.TotalUnits}` : 'Unit 1';
+    const serial = unit.Serial || unit.Barcode || '';
 
     return `
       <div class="label-card">
@@ -775,24 +774,21 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
 
         <div class="prod-title" title="${unit.ProductName}">${unit.ProductName}</div>
 
-        <div class="code-section">
-          <div class="qr-container">
-            ${qrSvg}
-          </div>
-          <div class="barcode-container">
-            ${barcodeSvg ? `<div class="barcode-svg-wrap">${barcodeSvg}</div>` : ''}
-            <div class="serial-text">${unit.Serial || unit.Barcode}</div>
-            <div class="unit-desc">NET QTY: 1 ${unit.Unit || 'PCS'}</div>
-          </div>
+        <div class="qr-center-box">
+          ${qrElement}
         </div>
 
+        <div class="serial-text">${serial}</div>
+
         <div class="card-footer">
-          <span class="exp-date">EXP: <strong>${unit.ExpiryDate || 'N/A'}</strong></span>
+          <span class="exp-date">Exp: <strong>${unit.ExpiryDate || 'N/A'}</strong></span>
           <span class="mrp-price">MRP: <strong>₹${mrp}</strong></span>
         </div>
       </div>
     `;
   }));
+
+  const isThermal = layout === 'thermal';
 
   const html = `
 <!DOCTYPE html>
@@ -802,8 +798,8 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
   <title>Material Inward Unit QR Labels (${unitLabels.length} Packets)</title>
   <style>
     @page {
-      size: ${layout === 'thermal' ? '50mm 40mm' : 'A4 portrait'};
-      margin: ${layout === 'thermal' ? '1mm' : '8mm'};
+      size: ${isThermal ? '50mm 40mm' : 'A4 portrait'};
+      margin: ${isThermal ? '0mm' : '8mm'};
     }
     * {
       box-sizing: border-box;
@@ -812,130 +808,215 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       margin: 0;
       padding: 0;
-      background: #fff;
+      background: #ffffff;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    .grid {
-      display: ${layout === 'thermal' ? 'block' : 'grid'};
-      grid-template-columns: repeat(3, 1fr);
-      gap: 5mm;
-    }
-    .label-card {
-      border: 1.5px solid #0f172a;
-      border-radius: 6px;
-      padding: 6px 8px;
-      background: #ffffff;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      page-break-inside: avoid;
-      break-inside: avoid;
-      ${layout === 'thermal' ? 'width: 48mm; height: 38mm; page-break-after: always; break-after: page; margin-bottom: 2mm;' : 'min-height: 52mm; height: 55mm;'}
-      box-sizing: border-box;
-      overflow: hidden;
-    }
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid #cbd5e1;
-      padding-bottom: 2px;
-      margin-bottom: 3px;
-    }
-    .store-tag {
-      font-size: 8px;
-      font-weight: 800;
-      letter-spacing: 0.8px;
-      color: #0f172a;
-      text-transform: uppercase;
-    }
-    .pkt-badge {
-      font-size: 7.5px;
-      font-weight: 800;
-      background: #0f172a;
-      color: #ffffff;
-      padding: 1px 5px;
-      border-radius: 3px;
-      letter-spacing: 0.5px;
-    }
-    .prod-title {
-      font-size: 11px;
-      font-weight: 800;
-      color: #0f172a;
-      line-height: 1.15;
-      margin-bottom: 3px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .code-section {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin: 2px 0 3px 0;
-      flex: 1;
-    }
-    .qr-container {
-      width: 58px;
-      height: 58px;
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .qr-container svg {
-      width: 100% !important;
-      height: 100% !important;
-      display: block;
-    }
-    .barcode-container {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      overflow: hidden;
-    }
-    .barcode-svg-wrap {
-      width: 100%;
-      height: 24px;
-      overflow: hidden;
-    }
-    .barcode-svg-wrap svg {
-      width: 100% !important;
-      height: 100% !important;
-      display: block;
-    }
-    .serial-text {
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 9.5px;
-      font-weight: 800;
-      letter-spacing: 0.8px;
-      color: #0f172a;
-      margin-top: 1px;
-    }
-    .unit-desc {
-      font-size: 8px;
-      color: #64748b;
-      font-weight: 600;
-    }
-    .card-footer {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-top: 1px dashed #64748b;
-      padding-top: 3px;
-      margin-top: auto;
-      font-size: 9px;
-      color: #334155;
-    }
-    .exp-date strong {
-      color: #b45309;
-    }
-    .mrp-price strong {
-      color: #0f172a;
-      font-size: 10.5px;
-    }
+    ${isThermal ? `
+      .grid {
+        display: block;
+        padding: 0;
+        margin: 0;
+      }
+      .label-card {
+        width: 50mm;
+        height: 40mm;
+        max-width: 50mm;
+        max-height: 40mm;
+        padding: 2mm 3mm;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: center;
+        text-align: center;
+        page-break-after: always;
+        break-after: page;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        overflow: hidden;
+        background: #ffffff;
+      }
+      .card-header {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 0.8px solid #cbd5e1;
+        padding-bottom: 1px;
+      }
+      .store-tag {
+        font-size: 7px;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        color: #334155;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 65%;
+      }
+      .pkt-badge {
+        font-size: 6.5px;
+        font-weight: 800;
+        background: #0f172a;
+        color: #ffffff;
+        padding: 0.5px 3px;
+        border-radius: 2px;
+        letter-spacing: 0.3px;
+      }
+      .prod-title {
+        width: 100%;
+        font-size: 8.5px;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.15;
+        margin: 1px 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .qr-center-box {
+        width: 22mm;
+        height: 22mm;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto;
+      }
+      .qr-center-box img, .qr-center-box svg {
+        width: 22mm !important;
+        height: 22mm !important;
+        object-fit: contain;
+        display: block;
+      }
+      .serial-text {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 8px;
+        font-weight: 800;
+        letter-spacing: 0.8px;
+        color: #0f172a;
+        margin: 0.5px 0;
+        line-height: 1;
+      }
+      .card-footer {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-top: 0.8px dashed #cbd5e1;
+        padding-top: 1px;
+        font-size: 7px;
+        color: #475569;
+      }
+      .exp-date strong {
+        color: #b45309;
+      }
+      .mrp-price strong {
+        color: #0f172a;
+        font-size: 8px;
+      }
+    ` : `
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 5mm;
+      }
+      .label-card {
+        border: 1.5px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 4mm 5mm;
+        background: #ffffff;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: center;
+        text-align: center;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        height: 56mm;
+        overflow: hidden;
+      }
+      .card-header {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #f1f5f9;
+        padding-bottom: 2px;
+      }
+      .store-tag {
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.8px;
+        color: #475569;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 65%;
+      }
+      .pkt-badge {
+        font-size: 8px;
+        font-weight: 800;
+        background: #0f172a;
+        color: #ffffff;
+        padding: 1px 6px;
+        border-radius: 3px;
+      }
+      .prod-title {
+        width: 100%;
+        font-size: 11px;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.25;
+        margin: 2px 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .qr-center-box {
+        width: 28mm;
+        height: 28mm;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 1mm auto;
+        background: #f8fafc;
+        border-radius: 4px;
+        padding: 1mm;
+      }
+      .qr-center-box img, .qr-center-box svg {
+        width: 26mm !important;
+        height: 26mm !important;
+        object-fit: contain;
+        display: block;
+      }
+      .serial-text {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 1.2px;
+        color: #0f172a;
+        margin-top: 1px;
+      }
+      .card-footer {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-top: 1px dashed #cbd5e1;
+        padding-top: 3px;
+        font-size: 9px;
+        color: #475569;
+      }
+      .exp-date strong {
+        color: #d97706;
+      }
+      .mrp-price strong {
+        color: #0f172a;
+        font-size: 10.5px;
+      }
+    `}
   </style>
 </head>
 <body>
@@ -946,7 +1027,7 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
 </html>
 `;
 
-  return printHtmlViaIframe(html, `Unit_Barcodes_${unitLabels.length}_Labels`);
+  return printHtmlViaIframe(html, `Unit_QR_Labels_${unitLabels.length}_Packets`);
 }
 
 /**

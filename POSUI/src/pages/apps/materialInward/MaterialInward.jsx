@@ -52,7 +52,8 @@ import {
   Close as CloseIcon,
   FileDownload as ExportIcon,
   CalendarMonth as CalendarIcon,
-  WarningAmber as WarningIcon
+  WarningAmber as WarningIcon,
+  ReceiptLong as ThermalIcon
 } from '@mui/icons-material';
 import { QRCodeSVG } from 'qrcode.react';
 import purchaseOrderService from '../../../_api/purchaseOrderService';
@@ -653,13 +654,22 @@ export default function MaterialInward() {
                                   <ViewIcon sx={{ fontSize: 19 }} />
                                 </IconButton>
                               </Tooltip>
-                              <Tooltip title="Print All Barcode Stickers">
+                              <Tooltip title="Print All QR Stickers (PDF Sheet)">
                                 <IconButton
                                   size="small"
-                                  onClick={() => printBarcodeLabels(items)}
+                                  onClick={() => printBarcodeLabels(items, { layout: 'sheet', storeName: activeStore?.name || 'POS SUPERMARKET' })}
                                   sx={{ color: '#10B981', '&:hover': { bgcolor: '#ECFDF5' } }}
                                 >
                                   <PrintIcon sx={{ fontSize: 19 }} />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Print Thermal Roll Stickers">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => printBarcodeLabels(items, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
+                                  sx={{ color: '#F59F00', '&:hover': { bgcolor: '#FFFBEB' } }}
+                                >
+                                  <ThermalIcon sx={{ fontSize: 19 }} />
                                 </IconButton>
                               </Tooltip>
                             </Box>
@@ -994,7 +1004,7 @@ export default function MaterialInward() {
                       <Button
                         variant="contained"
                         startIcon={<PrintIcon />}
-                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'sheet' })}
+                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'sheet', storeName: activeStore?.name || 'POS SUPERMARKET' })}
                         sx={{
                           bgcolor: '#059669',
                           '&:hover': { bgcolor: '#047857' },
@@ -1009,7 +1019,7 @@ export default function MaterialInward() {
                       <Button
                         variant="outlined"
                         startIcon={<PrintIcon />}
-                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal' })}
+                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
                         sx={{
                           borderColor: '#059669',
                           color: '#059669',
@@ -1115,7 +1125,7 @@ export default function MaterialInward() {
                             size="small"
                             variant="outlined"
                             startIcon={<PrintIcon sx={{ fontSize: 14 }} />}
-                            onClick={() => printBarcodeLabels([unit], { layout: 'sheet' })}
+                            onClick={() => printBarcodeLabels([unit], { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
                             sx={{
                               textTransform: 'none',
                               fontSize: 11,
@@ -1147,9 +1157,23 @@ export default function MaterialInward() {
                   </Button>
                   <Box sx={{ display: 'flex', gap: 1.5 }}>
                     <Button
+                      variant="outlined"
+                      startIcon={<PrintIcon />}
+                      onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
+                      sx={{
+                        borderRadius: 2,
+                        fontWeight: 700,
+                        borderColor: '#059669',
+                        color: '#059669',
+                        '&:hover': { bgcolor: '#F0FDF4', borderColor: '#047857' }
+                      }}
+                    >
+                      Thermal Roll
+                    </Button>
+                    <Button
                       variant="contained"
                       startIcon={<PrintIcon />}
-                      onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'sheet' })}
+                      onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'sheet', storeName: activeStore?.name || 'POS SUPERMARKET' })}
                       sx={{
                         borderRadius: 2,
                         fontWeight: 700,
@@ -1324,7 +1348,7 @@ export default function MaterialInward() {
             variant="outlined"
             startIcon={<PrintIcon />}
             onClick={() => {
-              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'thermal' });
+              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' });
             }}
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
@@ -1335,7 +1359,7 @@ export default function MaterialInward() {
             color="primary"
             startIcon={<PrintIcon />}
             onClick={() => {
-              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'sheet' });
+              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'sheet', storeName: activeStore?.name || 'POS SUPERMARKET' });
             }}
             sx={{ fontWeight: 700, px: 3, borderRadius: 2, bgcolor: '#10B981', '&:hover': { bgcolor: '#059669' } }}
           >
