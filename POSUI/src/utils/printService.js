@@ -689,6 +689,25 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
 
   const storeName = options.storeName || 'POS Supermarket';
   const layout = options.layout || 'sheet'; // 'sheet' (A4 Multi-label PDF) | 'thermal' (Individual roll)
+  const paperWidth = options.paperWidth || '80mm';
+
+  // Sizing parameters for thermal roll printing:
+  // - 80mm roll (Standard POS Counter Thermal Roll): 76mm width, 44mm QR, 14px bold title, 13px serial
+  // - 58mm roll (Compact POS Thermal Roll): 54mm width, 34mm QR, 12px title, 11px serial
+  // - 50mm roll (Compact Sticker Roll): 48mm width, 30mm QR, 11px title, 10px serial
+  const isThermal = layout === 'thermal';
+  const is58mm = paperWidth === '58mm';
+  const is50mm = paperWidth === '50mm';
+
+  const cardWidth = is58mm ? '54mm' : (is50mm ? '48mm' : '76mm');
+  const cardPadding = is58mm ? '3mm 4mm 5mm 4mm' : (is50mm ? '2.5mm 3mm 4mm 3mm' : '4mm 5mm 6mm 5mm');
+  const qrBoxSize = is58mm ? '34mm' : (is50mm ? '30mm' : '44mm');
+  const storeTagSize = is58mm ? '10px' : (is50mm ? '9px' : '11.5px');
+  const badgeSize = is58mm ? '9.5px' : (is50mm ? '8.5px' : '10.5px');
+  const titleSize = is58mm ? '12px' : (is50mm ? '11px' : '14px');
+  const serialSize = is58mm ? '11px' : (is50mm ? '10px' : '13px');
+  const footerSize = is58mm ? '10px' : (is50mm ? '9.5px' : '11.5px');
+  const mrpSize = is58mm ? '12px' : (is50mm ? '11px' : '14px');
 
   // 1. Expand items into individual unit labels
   const unitLabels = [];
@@ -743,7 +762,7 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
       const qrDataUrl = await QRCode.toDataURL(qrData, {
         errorCorrectionLevel: 'M',
         margin: 1,
-        width: 320,
+        width: 480,
         color: { dark: '#000000', light: '#ffffff' }
       });
       qrElement = `<img src="${qrDataUrl}" class="qr-img" alt="QR Code" />`;
@@ -788,8 +807,6 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
     `;
   }));
 
-  const isThermal = layout === 'thermal';
-
   const html = `
 <!DOCTYPE html>
 <html>
@@ -798,7 +815,7 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
   <title>Material Inward Unit QR Labels (${unitLabels.length} Packets)</title>
   <style>
     @page {
-      size: ${isThermal ? '50mm 40mm' : 'A4 portrait'};
+      size: ${isThermal ? (paperWidth + ' auto') : 'A4 portrait'};
       margin: ${isThermal ? '0mm' : '8mm'};
     }
     * {
@@ -819,11 +836,10 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
         margin: 0;
       }
       .label-card {
-        width: 50mm;
-        height: 40mm;
-        max-width: 50mm;
-        max-height: 40mm;
-        padding: 2mm 3mm;
+        width: ${cardWidth};
+        max-width: ${cardWidth};
+        margin: 0 auto;
+        padding: ${cardPadding};
         display: flex;
         flex-direction: column;
         justify-content: space-between;
@@ -833,22 +849,25 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
         break-after: page;
         page-break-inside: avoid;
         break-inside: avoid;
-        overflow: hidden;
         background: #ffffff;
+        border-bottom: 2px dashed #000000;
+        margin-bottom: 4mm;
+        box-sizing: border-box;
       }
       .card-header {
         width: 100%;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        border-bottom: 0.8px solid #cbd5e1;
-        padding-bottom: 1px;
+        border-bottom: 1.5px solid #000000;
+        padding-bottom: 2px;
+        margin-bottom: 2px;
       }
       .store-tag {
-        font-size: 7px;
+        font-size: ${storeTagSize};
         font-weight: 900;
-        letter-spacing: 0.5px;
-        color: #334155;
+        letter-spacing: 0.8px;
+        color: #000000;
         text-transform: uppercase;
         white-space: nowrap;
         overflow: hidden;
@@ -856,64 +875,64 @@ export async function printBarcodeLabels(itemsOrUnits, options = {}) {
         max-width: 65%;
       }
       .pkt-badge {
-        font-size: 6.5px;
+        font-size: ${badgeSize};
         font-weight: 800;
-        background: #0f172a;
+        background: #000000;
         color: #ffffff;
-        padding: 0.5px 3px;
-        border-radius: 2px;
-        letter-spacing: 0.3px;
+        padding: 1.5px 6px;
+        border-radius: 3px;
+        letter-spacing: 0.4px;
       }
       .prod-title {
         width: 100%;
-        font-size: 8.5px;
+        font-size: ${titleSize};
         font-weight: 800;
-        color: #0f172a;
-        line-height: 1.15;
-        margin: 1px 0;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        color: #000000;
+        line-height: 1.25;
+        margin: 3px 0;
+        word-break: break-word;
       }
       .qr-center-box {
-        width: 22mm;
-        height: 22mm;
+        width: ${qrBoxSize};
+        height: ${qrBoxSize};
         display: flex;
         align-items: center;
         justify-content: center;
-        margin: 0 auto;
+        margin: 2mm auto;
       }
       .qr-center-box img, .qr-center-box svg {
-        width: 22mm !important;
-        height: 22mm !important;
+        width: ${qrBoxSize} !important;
+        height: ${qrBoxSize} !important;
         object-fit: contain;
         display: block;
       }
       .serial-text {
         font-family: 'Courier New', Courier, monospace;
-        font-size: 8px;
-        font-weight: 800;
-        letter-spacing: 0.8px;
-        color: #0f172a;
-        margin: 0.5px 0;
-        line-height: 1;
+        font-size: ${serialSize};
+        font-weight: 900;
+        letter-spacing: 1.5px;
+        color: #000000;
+        margin: 2px 0 3px 0;
+        line-height: 1.2;
       }
       .card-footer {
         width: 100%;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        border-top: 0.8px dashed #cbd5e1;
-        padding-top: 1px;
-        font-size: 7px;
-        color: #475569;
+        border-top: 1.5px dashed #000000;
+        padding-top: 3px;
+        font-size: ${footerSize};
+        color: #000000;
       }
       .exp-date strong {
-        color: #b45309;
+        color: #000000;
+        font-weight: 800;
       }
       .mrp-price strong {
-        color: #0f172a;
-        font-size: 8px;
+        color: #000000;
+        font-size: ${mrpSize};
+        font-weight: 900;
       }
     ` : `
       .grid {

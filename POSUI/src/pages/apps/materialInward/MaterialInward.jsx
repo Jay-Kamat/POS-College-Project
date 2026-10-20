@@ -107,6 +107,7 @@ export default function MaterialInward() {
 
   // Filter state for Step 3 unit barcodes preview
   const [selectedUnitFilter, setSelectedUnitFilter] = useState('all');
+  const [thermalSize, setThermalSize] = useState('80mm');
 
   // Toast notification
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
@@ -666,7 +667,7 @@ export default function MaterialInward() {
                               <Tooltip title="Print Thermal Roll Stickers">
                                 <IconButton
                                   size="small"
-                                  onClick={() => printBarcodeLabels(items, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
+                                  onClick={() => printBarcodeLabels(items, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET', paperWidth: thermalSize })}
                                   sx={{ color: '#F59F00', '&:hover': { bgcolor: '#FFFBEB' } }}
                                 >
                                   <ThermalIcon sx={{ fontSize: 19 }} />
@@ -1016,10 +1017,24 @@ export default function MaterialInward() {
                       >
                         Print All ({allGeneratedUnits.length}) in One PDF
                       </Button>
+                      <FormControl size="small" sx={{ minWidth: 160 }}>
+                        <InputLabel id="thermal-size-label">Thermal Roll Size</InputLabel>
+                        <Select
+                          labelId="thermal-size-label"
+                          value={thermalSize}
+                          label="Thermal Roll Size"
+                          onChange={(e) => setThermalSize(e.target.value)}
+                          sx={{ height: 40, bgcolor: '#FFFFFF', borderRadius: 2, fontWeight: 700, fontSize: 13 }}
+                        >
+                          <MenuItem value="80mm">80mm Roll (Large - Standard POS)</MenuItem>
+                          <MenuItem value="58mm">58mm Roll (Medium - Compact)</MenuItem>
+                          <MenuItem value="50mm">50mm Roll (Compact Sticker)</MenuItem>
+                        </Select>
+                      </FormControl>
                       <Button
                         variant="outlined"
-                        startIcon={<PrintIcon />}
-                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
+                        startIcon={<ThermalIcon />}
+                        onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET', paperWidth: thermalSize })}
                         sx={{
                           borderColor: '#059669',
                           color: '#059669',
@@ -1028,7 +1043,7 @@ export default function MaterialInward() {
                           '&:hover': { bgcolor: '#F0FDF4', borderColor: '#047857' }
                         }}
                       >
-                        Thermal Roll
+                        Thermal Roll ({thermalSize})
                       </Button>
                     </Box>
                   </Box>
@@ -1124,8 +1139,8 @@ export default function MaterialInward() {
                             fullWidth
                             size="small"
                             variant="outlined"
-                            startIcon={<PrintIcon sx={{ fontSize: 14 }} />}
-                            onClick={() => printBarcodeLabels([unit], { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
+                            startIcon={<ThermalIcon sx={{ fontSize: 14 }} />}
+                            onClick={() => printBarcodeLabels([unit], { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET', paperWidth: thermalSize })}
                             sx={{
                               textTransform: 'none',
                               fontSize: 11,
@@ -1136,7 +1151,7 @@ export default function MaterialInward() {
                               '&:hover': { borderColor: '#10B981', color: '#10B981', bgcolor: '#F0FDF4' }
                             }}
                           >
-                            Print Single Sticker
+                            Print Single Sticker ({thermalSize})
                           </Button>
                         </Box>
                       </Card>
@@ -1158,8 +1173,8 @@ export default function MaterialInward() {
                   <Box sx={{ display: 'flex', gap: 1.5 }}>
                     <Button
                       variant="outlined"
-                      startIcon={<PrintIcon />}
-                      onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' })}
+                      startIcon={<ThermalIcon />}
+                      onClick={() => printBarcodeLabels(allGeneratedUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET', paperWidth: thermalSize })}
                       sx={{
                         borderRadius: 2,
                         fontWeight: 700,
@@ -1168,7 +1183,7 @@ export default function MaterialInward() {
                         '&:hover': { bgcolor: '#F0FDF4', borderColor: '#047857' }
                       }}
                     >
-                      Thermal Roll
+                      Thermal Roll ({thermalSize})
                     </Button>
                     <Button
                       variant="contained"
@@ -1346,13 +1361,13 @@ export default function MaterialInward() {
           </Button>
           <Button
             variant="outlined"
-            startIcon={<PrintIcon />}
+            startIcon={<ThermalIcon />}
             onClick={() => {
-              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET' });
+              if (allDocketUnits.length > 0) printBarcodeLabels(allDocketUnits, { layout: 'thermal', storeName: activeStore?.name || 'POS SUPERMARKET', paperWidth: thermalSize });
             }}
             sx={{ fontWeight: 700, borderRadius: 2 }}
           >
-            Thermal Roll
+            Thermal Roll ({thermalSize})
           </Button>
           <Button
             variant="contained"
