@@ -1,26 +1,20 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize(Roles = "Admin,admin,Inventory,inventory,Inventory Manager")]
 [Route("api/material-returns")]
 [Route("api/material_returns")]
-public class MaterialReturnsController : ControllerBase
+public class MaterialReturnsController : BaseApiController
 {
     private readonly PosDbService _db;
 
     public MaterialReturnsController(PosDbService db)
     {
         _db = db;
-    }
-
-    private string? ResolveStoreId(string? queryStoreId)
-    {
-        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
-        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
-        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
     }
 
     [HttpGet("reasons")]
@@ -35,11 +29,24 @@ public class MaterialReturnsController : ControllerBase
         [FromQuery] string? reasonId, 
         [FromQuery] string? vendorId, 
         [FromQuery] string? search,
-        [FromQuery] string? storeId)
+        [FromQuery] string? storeId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
     {
         var targetStoreId = ResolveStoreId(storeId);
-        var list = await _db.GetMaterialReturnsAsync(reasonId, vendorId, search, targetStoreId);
-        return Ok(list);
+        var list = (await _db.GetMaterialReturnsAsync(reasonId, vendorId, search, targetStoreId)).ToList();
+        
+        var totalCount = list.Count;
+        var pagedItems = list.Skip((Math.Max(1, page) - 1) * Math.Max(1, pageSize)).Take(Math.Max(1, pageSize)).ToList();
+
+        return Ok(new {
+            status = "success",
+            count = totalCount,
+            pageNumber = page,
+            pageSize = pageSize,
+            totalPages = (int)Math.Ceiling((double)totalCount / Math.Max(1, pageSize)),
+            data = pagedItems
+        });
     }
 
     [HttpGet("stats")]
@@ -64,7 +71,8 @@ public class MaterialReturnsController : ControllerBase
     public async Task<IActionResult> CreateMaterialReturn([FromBody] JsonElement body)
     {
         var targetStoreId = ResolveStoreId(null);
-        var created = await _db.CreateMaterialReturnAsync(body, targetStoreId);
+        var userId = GetCurrentUserId();
+        var created = await _db.CreateMaterialReturnAsync(body, targetStoreId, userId);
         return StatusCode(201, created);
     }
 

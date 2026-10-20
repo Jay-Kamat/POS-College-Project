@@ -27,7 +27,8 @@ import {
   MenuItem,
   Select,
   FormControl,
-  InputLabel
+  InputLabel,
+  CircularProgress
 } from '@mui/material';
 import {
   QrCodeScanner as ScannerIcon,
@@ -54,6 +55,7 @@ import {
   addItem,
   updateQuantity,
   setQuantity,
+
   removeItem,
   setCustomer,
   setPaymentMode,
@@ -90,10 +92,11 @@ export default function PosTerminal() {
   const [selectedCategory, setSelectedCategory] = useState('cat_all');
   const [products, setProducts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
   const [createdInvoice, setCreatedInvoice] = useState(null);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [heldBucketsDialogOpen, setHeldBucketsDialogOpen] = useState(false);
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
@@ -579,6 +582,8 @@ export default function PosTerminal() {
 
   // Finalize Checkout (F9)
   const handleCheckout = async () => {
+    if (isCheckingOut) return;
+
     if (cart.items.length === 0) {
       setToast({ open: true, message: 'Cannot generate invoice for an empty cart.', severity: 'error' });
       return;
@@ -593,8 +598,9 @@ export default function PosTerminal() {
       return;
     }
 
+    setIsCheckingOut(true);
     try {
-      // Create Invoice atomically (which decrements stock in DB)
+      // Create Invoice atomically (which decrements stock in DB with FOR UPDATE lock and server calculation)
       const invoice = await invoiceService.createInvoiceFromCart(cart, activeStore);
       setCreatedInvoice(invoice);
       setShowSuccessDialog(true);
@@ -607,7 +613,14 @@ export default function PosTerminal() {
       });
       setProducts(refreshed);
     } catch (err) {
-      setToast({ open: true, message: `Checkout error: ${err.message}`, severity: 'error' });
+      const is409 = err.status === 409 || err.message?.includes('Insufficient stock');
+      setToast({
+        open: true,
+        message: is409 ? `Stock Conflict (409): ${err.message}` : `Checkout error: ${err.message}`,
+        severity: 'error'
+      });
+    } finally {
+      setIsCheckingOut(false);
     }
   };
 
@@ -1037,8 +1050,8 @@ export default function PosTerminal() {
                       const q = params.inputValue.toLowerCase().trim();
                       const filtered = options.filter(opt => {
                         return (opt.Name && opt.Name.toLowerCase().includes(q)) ||
-                               (opt.MobileNumber && opt.MobileNumber.includes(q)) ||
-                               (opt.GstNumber && opt.GstNumber.toLowerCase().includes(q));
+                          (opt.MobileNumber && opt.MobileNumber.includes(q)) ||
+                          (opt.GstNumber && opt.GstNumber.toLowerCase().includes(q));
                       });
                       if (q !== '') {
                         filtered.push({
@@ -1448,8 +1461,8 @@ export default function PosTerminal() {
                     fullWidth
                     variant="contained"
                     color="success"
-                    disabled={cart.items.length === 0}
-                    startIcon={<PayIcon />}
+                    disabled={cart.items.length === 0 || isCheckingOut}
+                    startIcon={isCheckingOut ? <CircularProgress size={20} color="inherit" /> : <PayIcon />}
                     onClick={handleCheckout}
                     sx={{
                       height: 48,
@@ -1462,7 +1475,7 @@ export default function PosTerminal() {
                       '&.Mui-disabled': { bgcolor: '#E2E8F0', color: '#94A3B8' }
                     }}
                   >
-                    GENERATE INVOICE (F9)
+                    {isCheckingOut ? 'PROCESSING BILL...' : 'GENERATE INVOICE (F9)'}
                   </Button>
                 </span>
               </Tooltip>

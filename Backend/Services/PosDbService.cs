@@ -16,7 +16,31 @@ public class PosDbService
         _connectionFactory = connectionFactory;
     }
 
-    private IDbConnection CreateConn() => _connectionFactory.CreateConnection();
+    public IDbConnection CreateConn() => _connectionFactory.CreateConnection();
+
+    public static string GetCurrentFinancialYear(DateTime? date = null)
+    {
+        var d = date ?? DateTime.UtcNow;
+        int startYear = d.Month >= 4 ? d.Year : d.Year - 1;
+        int endYear = startYear + 1;
+        return $"{startYear % 100:D2}{endYear % 100:D2}";
+    }
+
+    public async Task<long> AllocateDocumentSequenceAsync(string storeId, string docType, string financialYear, IDbTransaction tx)
+    {
+        var sql = @"
+            INSERT INTO document_sequences (store_id, doc_type, financial_year, last_number, updated_at)
+            VALUES (@StoreId, @DocType, @FY, 101, NOW())
+            ON CONFLICT (store_id, doc_type, financial_year)
+            DO UPDATE SET last_number = document_sequences.last_number + 1, updated_at = NOW()
+            RETURNING last_number;
+        ";
+        return await tx.Connection!.ExecuteScalarAsync<long>(sql, new {
+            StoreId = storeId,
+            DocType = docType.ToUpperInvariant(),
+            FY = financialYear
+        }, transaction: tx);
+    }
 
     // -------------------------------------------------------------
     // Products
@@ -720,128 +744,213 @@ public class PosDbService
         return inv;
     }
 
-    public async Task<Invoice> CreateInvoiceAsync(CartDto cart, Store? activeStore)
+    public async Task<Invoice> CreateInvoiceAsync(CartDto cart, Store? activeStore, string? userId = "user_admin_01")
     {
         if (cart.Items == null || cart.Items.Count == 0)
             throw new InvalidOperationException("Cannot generate invoice for an empty cart.");
 
         using var conn = (NpgsqlConnection)CreateConn();
         await conn.OpenAsync();
-        using var tx = await conn.BeginTransactionAsync();
+        using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
 
         try
         {
-            var targetStoreId = activeStore?.Id ?? "store_mum_01";
+            var targetStoreId = !string.IsNullOrWhiteSpace(activeStore?.Id) ? activeStore.Id.Trim() : "store_mum_01";
             var prefix = string.IsNullOrWhiteSpace(activeStore?.InvoicePrefix) ? "INV" : activeStore.InvoicePrefix.Trim();
-            var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM invoices WHERE store_id = @StoreId", new { StoreId = targetStoreId }, transaction: tx);
-            var sequence = 101 + count;
-            var documentNumber = $"{prefix}-2627-{sequence:D6}";
+            
+            // 1. Gapless Sequence Allocation with Row Lock
+            var fy = GetCurrentFinancialYear();
+            var sequence = await AllocateDocumentSequenceAsync(targetStoreId, "INV", fy, tx);
+            var documentNumber = $"{prefix}-{fy}-{sequence:D6}";
             var id = $"inv_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
-            var storeState = (activeStore?.State ?? "Maharashtra").ToLower();
-            var customerState = (cart.Customer?.State ?? "Maharashtra").ToLower();
-            var isInterState = storeState != customerState;
+            var storeState = (activeStore?.State ?? "Maharashtra").Trim().ToLowerInvariant();
+            var customerState = (cart.Customer?.State ?? "Maharashtra").Trim().ToLowerInvariant();
+            var isInterState = !string.IsNullOrEmpty(storeState) && !string.IsNullOrEmpty(customerState) && storeState != customerState;
 
             var invoiceItems = new List<InvoiceItem>();
+            decimal computedSubtotal = 0m;
+            decimal computedCgst = 0m;
+            decimal computedSgst = 0m;
+            decimal computedIgst = 0m;
 
             foreach (var item in cart.Items)
             {
-                var rate = item.Rate ?? item.Cost ?? 0;
+                var pId = !string.IsNullOrWhiteSpace(item.Id) ? item.Id.Trim() : (!string.IsNullOrWhiteSpace(item.ProductId) ? item.ProductId.Trim() : "");
+                var pNum = !string.IsNullOrWhiteSpace(item.ProductNumber) ? item.ProductNumber.Trim() : (!string.IsNullOrWhiteSpace(item.Barcode) ? item.Barcode.Trim() : pId);
                 var qty = item.Quantity > 0 ? item.Quantity : 1m;
-                var taxPct = item.TaxPercent ?? 5;
-                var lineSubtotal = rate * qty;
-                decimal cgst = 0, sgst = 0, igst = 0;
 
-                if (isInterState)
-                {
-                    igst = Math.Round((lineSubtotal * taxPct) / 100m, 2);
-                }
-                else
-                {
-                    cgst = Math.Round((lineSubtotal * (taxPct / 2m)) / 100m, 2);
-                    sgst = Math.Round((lineSubtotal * (taxPct / 2m)) / 100m, 2);
-                }
-
-                var lineTotal = lineSubtotal + cgst + sgst + igst;
-                var pId = !string.IsNullOrWhiteSpace(item.Id) ? item.Id : (item.ProductId ?? "");
-                var pNum = !string.IsNullOrWhiteSpace(item.ProductNumber) ? item.ProductNumber : (!string.IsNullOrWhiteSpace(item.Barcode) ? item.Barcode : pId);
-                var pName = !string.IsNullOrWhiteSpace(item.Name) ? item.Name : (item.ProductName ?? "Product");
-
-                // 1. Stock check scoped to active store
-                var stockRow = await conn.QueryFirstOrDefaultAsync(
-                    @"SELECT id, name, stock_quantity FROM products 
+                // 2. Lock product row in DB for concurrency safety (SELECT ... FOR UPDATE)
+                var prodRow = await conn.QueryFirstOrDefaultAsync(
+                    @"SELECT id, product_number, name, cost, tax_percent, unit, stock_quantity 
+                      FROM products 
                       WHERE (id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum) 
-                        AND (store_id = @StoreId OR store_id IS NULL) AND record_status = 0 LIMIT 1",
+                        AND (store_id = @StoreId OR store_id IS NULL) 
+                        AND record_status = 0 
+                      FOR UPDATE",
                     new { Id = pId, PNum = pNum, StoreId = targetStoreId },
                     transaction: tx
                 );
 
-                if (stockRow != null)
-                {
-                    decimal avail = (decimal)(stockRow.stock_quantity ?? 0m);
-                    if (avail <= 0)
-                        throw new InvalidOperationException($"Item \"{stockRow.name}\" is out of stock in this outlet's inventory.");
-                    if (qty > avail)
-                        throw new InvalidOperationException($"Cannot checkout {qty} of \"{stockRow.name}\". Only {avail} available in this outlet.");
+                if (prodRow == null)
+                    throw new InvalidOperationException($"Product '{item.Name ?? pNum}' not found in active store catalog.");
 
-                    // 2. Decrement stock in active store
-                    await conn.ExecuteAsync(@"
-                        UPDATE products
-                        SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
-                        WHERE id = @FoundId AND (store_id = @StoreId OR store_id IS NULL)
-                    ", new { Qty = qty, FoundId = (string)stockRow.id, StoreId = targetStoreId }, transaction: tx);
+                string actualProdId = (string)prodRow.id;
+                string actualProdNum = (string)prodRow.product_number;
+                string actualProdName = (string)prodRow.name;
+                decimal actualCost = (decimal)prodRow.cost;
+                decimal actualTaxPct = (decimal)(prodRow.tax_percent ?? 5m);
+                string actualUnit = (string)(prodRow.unit ?? "PCS");
+                decimal availableStock = (decimal)(prodRow.stock_quantity ?? 0m);
+
+                // 3. Strict Stock Verification
+                if (availableStock < qty)
+                {
+                    throw new InsufficientStockException(actualProdName, availableStock, qty);
+                }
+
+                // 4. Server-side Recalculation (Never trust client rates or totals)
+                var lineSubtotal = Math.Round(actualCost * qty, 2);
+                decimal lineCgst = 0m, lineSgst = 0m, lineIgst = 0m;
+
+                if (isInterState)
+                {
+                    lineIgst = Math.Round((lineSubtotal * actualTaxPct) / 100m, 2);
                 }
                 else
                 {
-                    // Fallback decrement
-                    await conn.ExecuteAsync(@"
-                        UPDATE products
-                        SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
-                        WHERE (id = @Id OR product_number = @Id OR id = @PNum OR product_number = @PNum)
-                          AND (store_id = @StoreId OR store_id IS NULL)
-                    ", new { Qty = qty, Id = pId, PNum = pNum, StoreId = targetStoreId }, transaction: tx);
+                    lineCgst = Math.Round((lineSubtotal * (actualTaxPct / 2m)) / 100m, 2);
+                    lineSgst = Math.Round((lineSubtotal * (actualTaxPct / 2m)) / 100m, 2);
                 }
+
+                var lineTotal = lineSubtotal + lineCgst + lineSgst + lineIgst;
+
+                computedSubtotal += lineSubtotal;
+                computedCgst += lineCgst;
+                computedSgst += lineSgst;
+                computedIgst += lineIgst;
+
+                // 5. FEFO Batch Deduction (First-Expired, First-Out)
+                var batches = (await conn.QueryAsync(
+                    @"SELECT id, batch_no, expiry_date, qty_remaining 
+                      FROM stock_batches 
+                      WHERE product_id = @ProdId AND store_id = @StoreId AND qty_remaining > 0 
+                      ORDER BY expiry_date ASC, created_at ASC 
+                      FOR UPDATE",
+                    new { ProdId = actualProdId, StoreId = targetStoreId },
+                    transaction: tx
+                )).ToList();
+
+                decimal qtyNeeded = qty;
+                foreach (var b in batches)
+                {
+                    if (qtyNeeded <= 0) break;
+                    string bId = (string)b.id;
+                    decimal bRem = (decimal)b.qty_remaining;
+                    decimal take = Math.Min(bRem, qtyNeeded);
+
+                    await conn.ExecuteAsync(
+                        "UPDATE stock_batches SET qty_remaining = qty_remaining - @Take WHERE id = @BId",
+                        new { Take = take, BId = bId },
+                        transaction: tx
+                    );
+
+                    string mvtId = $"mvt_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+                    decimal curStock = Convert.ToDecimal(prodRow.stock_quantity ?? 0m);
+                    await conn.ExecuteAsync(
+                        @"INSERT INTO stock_movements (id, product_id, store_id, batch_id, movement_type, qty_delta, qty_after, reference_doc, created_by)
+                          VALUES (@Id, @ProdId, @StoreId, @BId, 'SALE', @QtyDelta, @QtyAfter, @RefDoc, @CreatedBy)",
+                        new { Id = mvtId, ProdId = actualProdId, StoreId = targetStoreId, BId = bId, QtyDelta = -take, QtyAfter = Math.Max(0, curStock - take), RefDoc = documentNumber, CreatedBy = userId ?? "system" },
+                        transaction: tx
+                    );
+
+                    qtyNeeded -= take;
+                }
+
+                if (qtyNeeded > 0)
+                {
+                    string mvtId = $"mvt_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+                    decimal curStock = Convert.ToDecimal(prodRow.stock_quantity ?? 0m);
+                    await conn.ExecuteAsync(
+                        @"INSERT INTO stock_movements (id, product_id, store_id, batch_id, movement_type, qty_delta, qty_after, reference_doc, created_by)
+                          VALUES (@Id, @ProdId, @StoreId, NULL, 'SALE', @QtyDelta, @QtyAfter, @RefDoc, @CreatedBy)",
+                        new { Id = mvtId, ProdId = actualProdId, StoreId = targetStoreId, QtyDelta = -qtyNeeded, QtyAfter = Math.Max(0, curStock - qtyNeeded), RefDoc = documentNumber, CreatedBy = userId ?? "system" },
+                        transaction: tx
+                    );
+                }
+
+                // 6. Deduct product overall stock_quantity
+                await conn.ExecuteAsync(
+                    @"UPDATE products 
+                      SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW() 
+                      WHERE id = @ProdId AND (store_id = @StoreId OR store_id IS NULL)",
+                    new { Qty = qty, ProdId = actualProdId, StoreId = targetStoreId },
+                    transaction: tx
+                );
 
                 invoiceItems.Add(new InvoiceItem
                 {
-                    ProductId = pId,
-                    ProductNumber = pNum,
-                    ProductName = pName,
+                    ProductId = actualProdId,
+                    ProductNumber = actualProdNum,
+                    ProductName = actualProdName,
                     Quantity = qty,
-                    Unit = item.Unit ?? "PCS",
-                    Rate = rate,
-                    TaxPercent = taxPct,
+                    Unit = actualUnit,
+                    Rate = actualCost,
+                    TaxPercent = actualTaxPct,
                     Subtotal = lineSubtotal,
-                    Cgst = cgst,
-                    Sgst = sgst,
-                    Igst = igst,
+                    Cgst = lineCgst,
+                    Sgst = lineSgst,
+                    Igst = lineIgst,
                     Total = lineTotal
                 });
             }
 
-            // Customer visits/spend update
+            // 7. Calculate Grand Total with Round-Off
+            decimal rawTotal = computedSubtotal + computedCgst + computedSgst + computedIgst;
+            decimal finalGrandTotal = Math.Round(rawTotal, 0, MidpointRounding.AwayFromZero);
+            decimal roundOff = Math.Round(finalGrandTotal - rawTotal, 2);
+
+            // 8. Customer updates
+            string? customerId = cart.Customer?.Id;
             if (!string.IsNullOrWhiteSpace(cart.Customer?.MobileNumber))
             {
                 var cleanMobile = new string(cart.Customer.MobileNumber.Where(char.IsDigit).ToArray());
-                var custId = await conn.ExecuteScalarAsync<string>("SELECT id FROM customers WHERE mobile_number = @Mobile", new { Mobile = cleanMobile }, transaction: tx);
-                if (custId != null)
+                var custRow = await conn.QueryFirstOrDefaultAsync(
+                    "SELECT id FROM customers WHERE mobile_number = @Mobile LIMIT 1",
+                    new { Mobile = cleanMobile },
+                    transaction: tx
+                );
+
+                if (custRow != null)
                 {
-                    await conn.ExecuteAsync("UPDATE customers SET total_visits = total_visits + 1, total_spend = total_spend + @Amt, updated_at = NOW() WHERE id = @Id", new { Amt = cart.GrandTotal, Id = custId }, transaction: tx);
+                    customerId = (string)custRow.id;
+                    await conn.ExecuteAsync(
+                        "UPDATE customers SET total_visits = total_visits + 1, total_spend = total_spend + @Amt, updated_at = NOW() WHERE id = @Id",
+                        new { Amt = finalGrandTotal, Id = customerId },
+                        transaction: tx
+                    );
                 }
-                else if (cleanMobile.Length == 10)
+                else if (cleanMobile.Length >= 10)
                 {
-                    await conn.ExecuteAsync("INSERT INTO customers (id, name, mobile_number, gst_number, state, country, total_visits, total_spend) VALUES (@Id, @Name, @Mobile, @Gst, @State, 'India', 1, @Amt)", new {
-                        Id = $"cust_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                        Name = cart.Customer.Name ?? "Customer",
-                        Mobile = cleanMobile,
-                        Gst = cart.Customer.Gstin ?? "",
-                        State = cart.Customer.State ?? "Maharashtra",
-                        Amt = cart.GrandTotal
-                    }, transaction: tx);
+                    customerId = $"cust_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+                    await conn.ExecuteAsync(
+                        @"INSERT INTO customers (id, name, mobile_number, gst_number, state, country, store_id, total_visits, total_spend)
+                          VALUES (@Id, @Name, @Mobile, @Gst, @State, 'India', @StoreId, 1, @Amt)",
+                        new {
+                            Id = customerId,
+                            Name = !string.IsNullOrWhiteSpace(cart.Customer.Name) ? cart.Customer.Name.Trim() : "Walk-in Customer",
+                            Mobile = cleanMobile,
+                            Gst = cart.Customer.Gstin ?? "",
+                            State = cart.Customer.State ?? "Maharashtra",
+                            StoreId = targetStoreId,
+                            Amt = finalGrandTotal
+                        },
+                        transaction: tx
+                    );
                 }
             }
 
-            // Insert invoice
+            // 9. Insert Invoice record
             var itemsJson = JsonSerializer.Serialize(invoiceItems);
             var insertSql = @"
                 INSERT INTO invoices (
@@ -853,29 +962,53 @@ public class PosDbService
                     @Id, @DocNum, NOW(), @CustomerId, @CustomerName, @MobileNumber,
                     @StoreId, @StoreName, @Subtotal, @Cgst, @Sgst, @Igst, @RoundOff, @Amount,
                     @ModeOfPayment, @IsPaymentReceived, @IsShare,
-                    @Items::jsonb, 'user_01', 'user_01'
+                    @Items::jsonb, @UserId, @UserId
                 ) RETURNING date;
             ";
 
             var invDate = await conn.ExecuteScalarAsync<DateTime>(insertSql, new {
                 Id = id,
                 DocNum = documentNumber,
-                CustomerId = cart.Customer?.Id,
+                CustomerId = customerId,
                 CustomerName = cart.Customer?.Name ?? "Walk-in Customer",
                 MobileNumber = cart.Customer?.MobileNumber ?? "",
                 StoreId = targetStoreId,
                 StoreName = activeStore?.Name ?? "DailyMart Express",
-                cart.Subtotal,
-                cart.Cgst,
-                cart.Sgst,
-                cart.Igst,
-                cart.RoundOff,
-                Amount = cart.GrandTotal,
+                Subtotal = computedSubtotal,
+                Cgst = computedCgst,
+                Sgst = computedSgst,
+                Igst = computedIgst,
+                RoundOff = roundOff,
+                Amount = finalGrandTotal,
                 ModeOfPayment = cart.PaymentMode,
-                cart.IsPaymentReceived,
+                IsPaymentReceived = cart.IsPaymentReceived,
                 IsShare = cart.SendWhatsApp,
-                Items = itemsJson
+                Items = itemsJson,
+                UserId = userId ?? "user_admin_01"
             }, transaction: tx);
+
+            // 10. Audit Log Entry
+            string auditId = $"aud_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+            await conn.ExecuteAsync(
+                @"INSERT INTO audit_log (id, store_id, user_id, action, target_entity, target_id, new_values)
+                  VALUES (@Id, @StoreId, @UserId, 'CHECKOUT', 'invoices', @TargetId, @NewVals::jsonb)",
+                new { Id = auditId, StoreId = targetStoreId, UserId = userId ?? "system", TargetId = id, NewVals = JsonSerializer.Serialize(new { documentNumber, amount = finalGrandTotal, itemCount = invoiceItems.Count }) },
+                transaction: tx
+            );
+
+            // 11. WhatsApp Outbox Enqueue if receipt sharing is enabled
+            if (cart.SendWhatsApp && !string.IsNullOrWhiteSpace(cart.Customer?.MobileNumber))
+            {
+                var cleanMobile = new string(cart.Customer.MobileNumber.Where(char.IsDigit).ToArray());
+                var receiptText = $"*DailyMart POS Receipt*\nInvoice: {documentNumber}\nDate: {DateTime.Now:dd/MM/yyyy HH:mm}\nAmount: Rs {finalGrandTotal:N2}\nThank you for shopping with us!";
+                string outboxId = $"wmsg_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+                await conn.ExecuteAsync(
+                    @"INSERT INTO whatsapp_outbox (id, store_id, recipient_mobile, invoice_id, message_text, status)
+                      VALUES (@Id, @StoreId, @Mobile, @InvId, @Msg, 'PENDING')",
+                    new { Id = outboxId, StoreId = targetStoreId, Mobile = cleanMobile, InvId = id, Msg = receiptText },
+                    transaction: tx
+                );
+            }
 
             await tx.CommitAsync();
 
@@ -884,17 +1017,17 @@ public class PosDbService
                 Id = id,
                 DocumentNumber = documentNumber,
                 Date = invDate,
-                CustomerId = cart.Customer?.Id,
+                CustomerId = customerId,
                 CustomerName = cart.Customer?.Name ?? "Walk-in Customer",
                 MobileNumber = cart.Customer?.MobileNumber ?? "",
                 StoreId = targetStoreId,
                 StoreName = activeStore?.Name ?? "DailyMart Express",
-                Subtotal = cart.Subtotal,
-                Cgst = cart.Cgst,
-                Sgst = cart.Sgst,
-                Igst = cart.Igst,
-                RoundOff = cart.RoundOff,
-                Amount = cart.GrandTotal,
+                Subtotal = computedSubtotal,
+                Cgst = computedCgst,
+                Sgst = computedSgst,
+                Igst = computedIgst,
+                RoundOff = roundOff,
+                Amount = finalGrandTotal,
                 ModeOfPayment = cart.PaymentMode,
                 IsPaymentReceived = cart.IsPaymentReceived,
                 IsShareReceiptThroughSms = cart.SendWhatsApp,
@@ -908,15 +1041,18 @@ public class PosDbService
         }
     }
 
-    public async Task<Invoice?> CancelInvoiceAsync(string id, string? reason)
+    public async Task<Invoice?> CancelInvoiceAsync(string id, string? reason, string? userId = "user_admin_01")
     {
         using var conn = (NpgsqlConnection)CreateConn();
         await conn.OpenAsync();
-        using var tx = await conn.BeginTransactionAsync();
+        using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
         try
         {
             var invRow = await conn.QueryFirstOrDefaultAsync(
-                "SELECT id, document_number, store_id, items, record_status FROM invoices WHERE id = @Id",
+                @"SELECT id, document_number, store_id, items, record_status, amount 
+                  FROM invoices 
+                  WHERE id = @Id 
+                  FOR UPDATE",
                 new { Id = id },
                 transaction: tx
             );
@@ -924,10 +1060,54 @@ public class PosDbService
             if (invRow.record_status == 1) return await GetInvoiceByIdAsync(id);
 
             var invStoreId = (string)(invRow.store_id ?? "store_mum_01");
+            string docNum = (string)invRow.document_number;
 
-            // Restore stock to the specific outlet
-            if (invRow.items != null)
+            // 1. Restore stock to batches based on historical movements
+            var movements = (await conn.QueryAsync(
+                @"SELECT product_id, batch_id, ABS(qty_delta) as quantity 
+                  FROM stock_movements 
+                  WHERE reference_doc = @DocNum AND movement_type = 'SALE'",
+                new { DocNum = docNum },
+                transaction: tx
+            )).ToList();
+
+            if (movements.Count > 0)
             {
+                foreach (var m in movements)
+                {
+                    string pId = (string)m.product_id;
+                    string? bId = m.batch_id != null ? (string)m.batch_id : null;
+                    decimal qty = Convert.ToDecimal(m.quantity);
+
+                    if (!string.IsNullOrEmpty(bId))
+                    {
+                        await conn.ExecuteAsync(
+                            "UPDATE stock_batches SET qty_remaining = qty_remaining + @Qty WHERE id = @BId",
+                            new { Qty = qty, BId = bId },
+                            transaction: tx
+                        );
+                    }
+
+                    await conn.ExecuteAsync(
+                        @"UPDATE products 
+                          SET stock_quantity = stock_quantity + @Qty, updated_at = NOW() 
+                          WHERE id = @PId AND (store_id = @StoreId OR store_id IS NULL)",
+                        new { Qty = qty, PId = pId, StoreId = invStoreId },
+                        transaction: tx
+                    );
+
+                    string cancelMvtId = $"mvt_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+                    await conn.ExecuteAsync(
+                        @"INSERT INTO stock_movements (id, product_id, store_id, batch_id, movement_type, qty_delta, qty_after, reference_doc, created_by)
+                          VALUES (@Id, @PId, @StoreId, @BId, 'SALE_CANCEL', @QtyDelta, 0, @RefDoc, @CreatedBy)",
+                        new { Id = cancelMvtId, PId = pId, StoreId = invStoreId, BId = bId, QtyDelta = qty, RefDoc = docNum, CreatedBy = userId ?? "system" },
+                        transaction: tx
+                    );
+                }
+            }
+            else if (invRow.items != null)
+            {
+                // Fallback for pre-migration invoices
                 try
                 {
                     var items = JsonSerializer.Deserialize<List<InvoiceItem>>((string)invRow.items.ToString()) ?? new();
@@ -944,9 +1124,27 @@ public class PosDbService
                 catch { }
             }
 
+            // 2. Mark invoice cancelled
             await conn.ExecuteAsync(
                 "UPDATE invoices SET record_status = 1, cancellation_reason = @Reason, updated_at = NOW() WHERE id = @Id",
                 new { Reason = reason ?? "Customer cancellation", Id = id },
+                transaction: tx
+            );
+
+            // 3. Audit Log Entry
+            string cancelAudId = $"aud_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+            await conn.ExecuteAsync(
+                @"INSERT INTO audit_log (id, store_id, user_id, action, target_entity, target_id, old_values, new_values, reason)
+                  VALUES (@Id, @StoreId, @UserId, 'INVOICE_CANCEL', 'invoices', @TargetId, @OldVals::jsonb, @NewVals::jsonb, @Reason)",
+                new {
+                    Id = cancelAudId,
+                    StoreId = invStoreId,
+                    UserId = userId ?? "system",
+                    TargetId = id,
+                    OldVals = JsonSerializer.Serialize(new { status = "Active", amount = (decimal)invRow.amount }),
+                    NewVals = JsonSerializer.Serialize(new { status = "Cancelled", reason = reason ?? "Customer cancellation" }),
+                    Reason = reason ?? "Customer cancellation"
+                },
                 transaction: tx
             );
 
@@ -1330,49 +1528,64 @@ public class PosDbService
     {
         var id = $"po_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         
-        using var conn = CreateConn();
-        var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM purchase_orders");
-        var docNum = $"PO-2026-{String.Format("{0:D5}", count + 51)}";
+        using var conn = (NpgsqlConnection)CreateConn();
+        await conn.OpenAsync();
+        using var tx = await conn.BeginTransactionAsync();
 
-        var targetStoreId = !string.IsNullOrWhiteSpace(storeId)
-            ? storeId.Trim()
-            : (data.TryGetProperty("StoreId", out var sId) ? sId.GetString() : "store_mum_01");
-        if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
-
-        var vendorId = data.TryGetProperty("VendorId", out var vId) ? vId.GetString() : "vnd_01";
-        var vendorName = data.TryGetProperty("VendorName", out var vNm) ? vNm.GetString() : null;
-        if (string.IsNullOrWhiteSpace(vendorName))
+        try
         {
-            var vRow = await conn.QueryFirstOrDefaultAsync<string>(
-                "SELECT name FROM vendors WHERE id = @Id", new { Id = vendorId });
-            vendorName = vRow ?? "Supplier";
-        }
+            var targetStoreId = !string.IsNullOrWhiteSpace(storeId)
+                ? storeId.Trim()
+                : (data.TryGetProperty("StoreId", out var sId) ? sId.GetString() : "store_mum_01");
+            if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
 
-        decimal totalAmount = 0;
-        if (data.TryGetProperty("TotalAmount", out var ta))
+            var fy = GetCurrentFinancialYear();
+            var seq = await AllocateDocumentSequenceAsync(targetStoreId, "PO", fy, tx);
+            var docNum = $"PO-{fy}-{seq:D6}";
+
+            var vendorId = data.TryGetProperty("VendorId", out var vId) ? vId.GetString() : "vnd_01";
+            var vendorName = data.TryGetProperty("VendorName", out var vNm) ? vNm.GetString() : null;
+            if (string.IsNullOrWhiteSpace(vendorName))
+            {
+                var vRow = await conn.QueryFirstOrDefaultAsync<string>(
+                    "SELECT name FROM vendors WHERE id = @Id", new { Id = vendorId }, transaction: tx);
+                vendorName = vRow ?? "Supplier";
+            }
+
+            decimal totalAmount = 0;
+            if (data.TryGetProperty("TotalAmount", out var ta))
+            {
+                if (ta.ValueKind == JsonValueKind.Number) totalAmount = ta.GetDecimal();
+                else if (decimal.TryParse(ta.GetString(), out var parsedTa)) totalAmount = parsedTa;
+            }
+
+            var itemsJson = data.TryGetProperty("Items", out var itms) ? itms.GetRawText() : "[]";
+
+            var sql = @"
+                INSERT INTO purchase_orders (id, document_number, vendor_id, vendor_name, store_id, status, total_amount, items)
+                VALUES (@Id, @DocNum, @VendorId, @VendorName, @StoreId, 'Sent', @Total, @Items::jsonb)
+                RETURNING id as ""Id"", document_number as ""DocumentNumber"", vendor_id as ""VendorId"", 
+                          vendor_name as ""VendorName"", store_id as ""StoreId"", date as ""Date"", status as ""Status"", 
+                          total_amount as ""TotalAmount"", items as ""Items"";
+            ";
+            var result = await conn.QuerySingleAsync(sql, new {
+                Id = id,
+                DocNum = docNum,
+                VendorId = vendorId,
+                VendorName = vendorName,
+                StoreId = targetStoreId,
+                Total = totalAmount,
+                Items = itemsJson
+            }, transaction: tx);
+
+            await tx.CommitAsync();
+            return result;
+        }
+        catch
         {
-            if (ta.ValueKind == JsonValueKind.Number) totalAmount = ta.GetDecimal();
-            else if (decimal.TryParse(ta.GetString(), out var parsedTa)) totalAmount = parsedTa;
+            await tx.RollbackAsync();
+            throw;
         }
-
-        var itemsJson = data.TryGetProperty("Items", out var itms) ? itms.GetRawText() : "[]";
-
-        var sql = @"
-            INSERT INTO purchase_orders (id, document_number, vendor_id, vendor_name, store_id, status, total_amount, items)
-            VALUES (@Id, @DocNum, @VendorId, @VendorName, @StoreId, 'Sent', @Total, @Items::jsonb)
-            RETURNING id as ""Id"", document_number as ""DocumentNumber"", vendor_id as ""VendorId"", 
-                      vendor_name as ""VendorName"", store_id as ""StoreId"", date as ""Date"", status as ""Status"", 
-                      total_amount as ""TotalAmount"", items as ""Items"";
-        ";
-        return await conn.QuerySingleAsync(sql, new {
-            Id = id,
-            DocNum = docNum,
-            VendorId = vendorId,
-            VendorName = vendorName,
-            StoreId = targetStoreId,
-            Total = totalAmount,
-            Items = itemsJson
-        });
     }
 
     public async Task<dynamic?> UpdatePurchaseOrderStatusAsync(string id, string status)
@@ -1492,7 +1705,7 @@ public class PosDbService
         return 0m;
     }
 
-    public async Task<dynamic> CreateMaterialInwardAsync(JsonElement data, string? storeId = null)
+    public async Task<dynamic> CreateMaterialInwardAsync(JsonElement data, string? storeId = null, string? userId = "user_admin_01")
     {
         var id = $"inw_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         using var conn = (NpgsqlConnection)CreateConn();
@@ -1505,6 +1718,10 @@ public class PosDbService
                 ? storeId.Trim()
                 : (GetJsonString(data, "storeId", "StoreId") ?? "store_mum_01");
             if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
+
+            var fy = GetCurrentFinancialYear();
+            var grnSeq = await AllocateDocumentSequenceAsync(targetStoreId, "GRN", fy, tx);
+            var grnDocNumber = $"GRN-{fy}-{grnSeq:D6}";
 
             var storeName = GetJsonString(data, "storeName", "StoreName");
             if (string.IsNullOrWhiteSpace(storeName))
@@ -1550,22 +1767,96 @@ public class PosDbService
 
             if (hasItems)
             {
+                int itemIdx = 1;
                 foreach (var itm in itemsArray.EnumerateArray())
                 {
                     var prodId = GetJsonString(itm, "productId", "id") ?? "";
                     var barcode = GetJsonString(itm, "barcode", "productNumber") ?? "";
                     var prodNumber = GetJsonString(itm, "productNumber", "barcode") ?? "";
                     var prodName = GetJsonString(itm, "productName", "name") ?? "";
+                    var batchNo = GetJsonString(itm, "batchNo", "batchBarcode") ?? $"BAT-{DateTime.UtcNow:yyyyMMdd}-{grnSeq:D4}-{itemIdx}";
+                    var expDateStr = GetJsonString(itm, "expiryDate", "expDate");
                     decimal receivedQty = GetJsonDecimal(itm, "receivedQty", "quantity", "orderedQty");
+                    decimal costPrice = GetJsonDecimal(itm, "rate", "cost", "unitCost");
 
                     if (receivedQty > 0)
                     {
+                        // 1. Resolve product from DB
+                        var prodRow = await conn.QueryFirstOrDefaultAsync(
+                            @"SELECT id, product_number, name, cost, days, is_exp_date 
+                              FROM products 
+                              WHERE (id = @Id OR product_number = @Id OR id = @Bc OR product_number = @Bc OR id = @Pn OR product_number = @Pn OR (name = @Nm AND @Nm <> ''))
+                                AND (store_id = @StoreId OR store_id IS NULL) 
+                              LIMIT 1",
+                            new { Id = prodId, Bc = barcode, Pn = prodNumber, Nm = prodName, StoreId = targetStoreId },
+                            transaction: tx
+                        );
+
+                        string resolvedProdId = prodId;
+                        int days = 90;
+                        if (prodRow != null)
+                        {
+                            resolvedProdId = (string)prodRow.id;
+                            if (prodRow.days != null)
+                            {
+                                days = Convert.ToInt32(prodRow.days);
+                            }
+                            if (costPrice <= 0 && prodRow.cost != null)
+                            {
+                                costPrice = Convert.ToDecimal(prodRow.cost);
+                            }
+                        }
+
+                        DateTime expiryDate = DateTime.UtcNow.AddDays(days);
+                        if (!string.IsNullOrWhiteSpace(expDateStr) && DateTime.TryParse(expDateStr, out var parsedExp))
+                        {
+                            expiryDate = DateTime.SpecifyKind(parsedExp, DateTimeKind.Utc);
+                        }
+
+                        // 2. Create Stock Batch for FEFO tracking
+                        var batchId = $"bat_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{itemIdx}";
+                        await conn.ExecuteAsync(
+                            @"INSERT INTO stock_batches (id, product_id, store_id, grn_id, batch_no, expiry_date, qty_received, qty_remaining, cost_price)
+                              VALUES (@Id, @ProdId, @StoreId, @GrnId, @BatchNo, @ExpiryDate, @Qty, @Qty, @Cost)",
+                            new {
+                                Id = batchId,
+                                ProdId = resolvedProdId,
+                                StoreId = targetStoreId,
+                                GrnId = id,
+                                BatchNo = batchNo,
+                                ExpiryDate = expiryDate,
+                                Qty = receivedQty,
+                                Cost = costPrice
+                            },
+                            transaction: tx
+                        );
+
+                        // 3. Record in Stock Movements Ledger
+                        string inwMvtId = $"mvt_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{itemIdx}_{Guid.NewGuid():N}"[..32];
+                        await conn.ExecuteAsync(
+                            @"INSERT INTO stock_movements (id, product_id, store_id, batch_id, movement_type, qty_delta, qty_after, reference_doc, created_by)
+                              VALUES (@Id, @ProdId, @StoreId, @BatchId, 'INWARD', @QtyDelta, @QtyAfter, @RefDoc, @CreatedBy)",
+                            new {
+                                Id = inwMvtId,
+                                ProdId = resolvedProdId,
+                                StoreId = targetStoreId,
+                                BatchId = batchId,
+                                QtyDelta = receivedQty,
+                                QtyAfter = receivedQty,
+                                RefDoc = grnDocNumber,
+                                CreatedBy = userId ?? "user_admin_01"
+                            },
+                            transaction: tx
+                        );
+
+                        // 4. Update Product Catalog Stock Quantity
                         await conn.ExecuteAsync(@"
                             UPDATE products
                             SET stock_quantity = stock_quantity + @Qty, updated_at = NOW()
-                            WHERE (id = @Id OR product_number = @Id OR id = @Bc OR product_number = @Bc OR id = @Pn OR product_number = @Pn OR (name = @Nm AND @Nm <> ''))
-                              AND (store_id = @StoreId OR store_id IS NULL)
-                        ", new { Qty = receivedQty, Id = prodId, Bc = barcode, Pn = prodNumber, Nm = prodName, StoreId = targetStoreId }, transaction: tx);
+                            WHERE id = @ResolvedId AND (store_id = @StoreId OR store_id IS NULL)
+                        ", new { Qty = receivedQty, ResolvedId = resolvedProdId, StoreId = targetStoreId }, transaction: tx);
+
+                        itemIdx++;
                     }
                 }
             }
@@ -1731,7 +2022,7 @@ public class PosDbService
         };
     }
 
-    public async Task<dynamic> CreateMaterialReturnAsync(JsonElement data, string? storeId = null)
+    public async Task<dynamic> CreateMaterialReturnAsync(JsonElement data, string? storeId = null, string? userId = "user_admin_01")
     {
         var id = $"mrn_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
@@ -1746,8 +2037,9 @@ public class PosDbService
                 : (data.TryGetProperty("StoreId", out var sId) ? sId.GetString() : "store_mum_01");
             if (string.IsNullOrWhiteSpace(targetStoreId)) targetStoreId = "store_mum_01";
 
-            var count = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM material_returns", transaction: tx);
-            var docNum = $"MRN-2026-{String.Format("{0:D5}", count + 14)}";
+            var fy = GetCurrentFinancialYear();
+            var mrnSeq = await AllocateDocumentSequenceAsync(targetStoreId, "MRN", fy, tx);
+            var docNum = $"MRN-{fy}-{mrnSeq:D6}";
 
             var vendorId = data.TryGetProperty("VendorId", out var vId) ? vId.GetString() : "vnd_01";
             var vendorName = data.TryGetProperty("VendorName", out var vNm) ? vNm.GetString() : null;
@@ -1779,12 +2071,13 @@ public class PosDbService
 
             var itemsJson = data.TryGetProperty("Items", out var itms) ? itms.GetRawText() : "[]";
 
-            // Decrement inventory stock in products table specifically for this store
+            // Decrement inventory stock and deduct from batches
             if (data.TryGetProperty("Items", out var itemsArray) && itemsArray.ValueKind == JsonValueKind.Array)
             {
                 foreach (var itm in itemsArray.EnumerateArray())
                 {
                     var prodId = itm.TryGetProperty("ProductId", out var pid) ? pid.GetString() : "";
+                    var batchBarcode = itm.TryGetProperty("BatchBarcode", out var bbc) ? bbc.GetString() : null;
                     decimal qty = 0;
                     if (itm.TryGetProperty("Quantity", out var q))
                     {
@@ -1799,11 +2092,68 @@ public class PosDbService
 
                     if (!string.IsNullOrWhiteSpace(prodId) && qty > 0)
                     {
-                        await conn.ExecuteAsync(@"
+                        // 1. Resolve product
+                        var prodRow = await conn.QueryFirstOrDefaultAsync(
+                            "SELECT id FROM products WHERE (id = @Id OR product_number = @Id) AND (store_id = @StoreId OR store_id IS NULL) LIMIT 1",
+                            new { Id = prodId, StoreId = targetStoreId },
+                            transaction: tx
+                        );
+                        string actualProdId = prodRow != null ? (string)prodRow.id : prodId;
+
+                        // 2. Find matching batch or earliest batch
+                        string? targetBatchId = null;
+                        if (!string.IsNullOrWhiteSpace(batchBarcode))
+                        {
+                            targetBatchId = await conn.QueryFirstOrDefaultAsync<string>(
+                                "SELECT id FROM stock_batches WHERE product_id = @ProdId AND store_id = @StoreId AND batch_no = @BNo LIMIT 1",
+                                new { ProdId = actualProdId, StoreId = targetStoreId, BNo = batchBarcode },
+                                transaction: tx
+                            );
+                        }
+
+                        if (targetBatchId == null)
+                        {
+                            targetBatchId = await conn.QueryFirstOrDefaultAsync<string>(
+                                "SELECT id FROM stock_batches WHERE product_id = @ProdId AND store_id = @StoreId AND qty_remaining > 0 ORDER BY expiry_date ASC LIMIT 1",
+                                new { ProdId = actualProdId, StoreId = targetStoreId },
+                                transaction: tx
+                            );
+                        }
+
+                        if (!string.IsNullOrEmpty(targetBatchId))
+                        {
+                            await conn.ExecuteAsync(
+                                "UPDATE stock_batches SET qty_remaining = GREATEST(0, qty_remaining - @Qty) WHERE id = @BId",
+                                new { Qty = qty, BId = targetBatchId },
+                                transaction: tx
+                            );
+                        }
+
+                        // 3. Update products overall stock
+                        var updatedStock = await conn.ExecuteScalarAsync<decimal>(@"
                             UPDATE products
                             SET stock_quantity = GREATEST(0, stock_quantity - @Qty), updated_at = NOW()
-                            WHERE (id = @Id OR product_number = @Id) AND (store_id = @StoreId OR store_id IS NULL)
-                        ", new { Qty = qty, Id = prodId, StoreId = targetStoreId }, transaction: tx);
+                            WHERE id = @Id AND (store_id = @StoreId OR store_id IS NULL)
+                            RETURNING stock_quantity
+                        ", new { Qty = qty, Id = actualProdId, StoreId = targetStoreId }, transaction: tx);
+
+                        // 4. Record in stock_movements
+                        string retMvtId = $"mvt_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}"[..32];
+                        await conn.ExecuteAsync(
+                            @"INSERT INTO stock_movements (id, product_id, store_id, batch_id, movement_type, qty_delta, qty_after, reference_doc, created_by)
+                              VALUES (@Id, @ProdId, @StoreId, @BId, 'RETURN_OUTWARD', @QtyDelta, @QtyAfter, @RefDoc, @CreatedBy)",
+                            new {
+                                Id = retMvtId,
+                                ProdId = actualProdId,
+                                StoreId = targetStoreId,
+                                BId = targetBatchId,
+                                QtyDelta = -qty,
+                                QtyAfter = updatedStock,
+                                RefDoc = docNum,
+                                CreatedBy = userId ?? "user_admin_01"
+                            },
+                            transaction: tx
+                        );
                     }
                 }
             }
@@ -2046,41 +2396,32 @@ public class PosDbService
     public async Task<IEnumerable<dynamic>> GetVendorWiseExpiredStockReportAsync(string? storeId = null)
     {
         using var conn = CreateConn();
-        var pSql = "SELECT * FROM products WHERE record_status = 0 AND is_exp_date = true";
-        var pParam = new DynamicParameters();
-        if (!string.IsNullOrWhiteSpace(storeId))
-        {
-            pSql += " AND store_id = @StoreId";
-            pParam.Add("StoreId", storeId.Trim());
-        }
-        var products = (await conn.QueryAsync<Product>(pSql, pParam)).ToList();
-        var vendors = (await GetVendorsAsync(null)).ToList();
-
-        var list = new List<dynamic>();
-        int idx = 0;
-        foreach (var p in products)
-        {
-            var v = vendors.Count > 0 ? vendors[idx % vendors.Count] : new Vendor { VendorCode = "VND-101", Name = "General Supplier" };
-            var days = p.Days ?? 10;
-            var lossVal = Math.Round(p.StockQuantity * p.Cost, 2);
-            list.Add(new
-            {
-                Id = $"exp_{p.Id}",
-                VendorCode = v.VendorCode,
-                VendorName = v.Name,
-                ProductName = p.Name,
-                BatchBarcode = p.ProductNumber,
-                ExpiryDate = DateTime.UtcNow.AddDays(days - 2).ToString("yyyy-MM-dd"),
-                DaysRemaining = days - 2,
-                IsOverdue = days <= 3,
-                Quantity = p.StockQuantity,
-                CostPrice = p.Cost,
-                LossValue = lossVal,
-                TotalLossValue = lossVal
-            });
-            idx++;
-        }
-        return list;
+        var sql = @"
+            SELECT 
+                b.id as ""Id"",
+                COALESCE(v.vendor_code, 'VND-GEN') as ""VendorCode"",
+                COALESCE(v.name, 'Direct Inward / Supplier') as ""VendorName"",
+                p.name as ""ProductName"",
+                b.batch_no as ""BatchBarcode"",
+                TO_CHAR(b.expiry_date, 'YYYY-MM-DD') as ""ExpiryDate"",
+                GREATEST(0, EXTRACT(DAY FROM (b.expiry_date::timestamp - CURRENT_DATE::timestamp))::int) as ""DaysRemaining"",
+                (b.expiry_date <= CURRENT_DATE) as ""IsOverdue"",
+                b.qty_remaining as ""Quantity"",
+                COALESCE(b.cost_price, p.cost) as ""CostPrice"",
+                ROUND(b.qty_remaining * COALESCE(b.cost_price, p.cost), 2) as ""LossValue"",
+                ROUND(b.qty_remaining * COALESCE(b.cost_price, p.cost), 2) as ""TotalLossValue""
+            FROM stock_batches b
+            JOIN products p ON b.product_id = p.id
+            LEFT JOIN material_inward mi ON b.grn_id = mi.id
+            LEFT JOIN vendors v ON mi.vendor_id = v.id
+            WHERE b.qty_remaining > 0
+              AND (b.expiry_date <= (CURRENT_DATE + INTERVAL '60 days'))
+              AND (@StoreId IS NULL OR b.store_id = @StoreId)
+            ORDER BY b.expiry_date ASC;
+        ";
+        var param = new DynamicParameters();
+        param.Add("StoreId", !string.IsNullOrWhiteSpace(storeId) ? storeId.Trim() : null);
+        return await conn.QueryAsync(sql, param);
     }
 
     // -------------------------------------------------------------
@@ -2208,5 +2549,157 @@ public class PosDbService
             });
         }
         return true;
+    }
+
+    // -------------------------------------------------------------
+    // Production Authentication & Refresh Tokens
+    // -------------------------------------------------------------
+    public async Task<UserAuthRecord?> GetUserByEmailForAuthAsync(string email)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            SELECT id as Id, name as Name, email as Email, role as Role, 
+                   store as Store, store_id as StoreId, password_hash as PasswordHash, 
+                   failed_attempts as FailedAttempts, locked_until as LockedUntil, 
+                   status as Status, record_status as RecordStatus
+            FROM users 
+            WHERE LOWER(email) = LOWER(@Email) AND record_status = 0
+            LIMIT 1;
+        ";
+        return await conn.QueryFirstOrDefaultAsync<UserAuthRecord>(sql, new { Email = email.Trim() });
+    }
+
+    public async Task RecordFailedLoginAsync(string userId)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            UPDATE users 
+            SET failed_attempts = failed_attempts + 1,
+                locked_until = CASE WHEN failed_attempts + 1 >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END,
+                updated_at = NOW()
+            WHERE id = @UserId;
+        ";
+        await conn.ExecuteAsync(sql, new { UserId = userId });
+    }
+
+    public async Task ResetFailedLoginAndSetLastLoginAsync(string userId)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            UPDATE users 
+            SET failed_attempts = 0,
+                locked_until = NULL,
+                last_login = TO_CHAR(NOW(), 'DD Mon YYYY, HH12:MI AM'),
+                updated_at = NOW()
+            WHERE id = @UserId;
+        ";
+        await conn.ExecuteAsync(sql, new { UserId = userId });
+    }
+
+    public async Task SaveRefreshTokenAsync(string id, string userId, string tokenHash, DateTime expiresAt, string? ipAddress)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_by_ip)
+            VALUES (@Id, @UserId, @TokenHash, @ExpiresAt, @IpAddress);
+        ";
+        await conn.ExecuteAsync(sql, new { Id = id, UserId = userId, TokenHash = tokenHash, ExpiresAt = expiresAt, IpAddress = ipAddress });
+    }
+
+    public async Task<RefreshTokenRecord?> GetRefreshTokenRecordAsync(string tokenHash)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            SELECT id as Id, user_id as UserId, token_hash as TokenHash, 
+                   expires_at as ExpiresAt, revoked_at as RevokedAt, created_at as CreatedAt,
+                   created_by_ip as CreatedByIp
+            FROM refresh_tokens
+            WHERE token_hash = @TokenHash
+            LIMIT 1;
+        ";
+        return await conn.QueryFirstOrDefaultAsync<RefreshTokenRecord>(sql, new { TokenHash = tokenHash });
+    }
+
+    public async Task RevokeRefreshTokenAsync(string tokenHash)
+    {
+        using var conn = CreateConn();
+        await conn.ExecuteAsync("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = @TokenHash", new { TokenHash = tokenHash });
+    }
+
+    public async Task RevokeAllUserTokensAsync(string userId)
+    {
+        using var conn = CreateConn();
+        await conn.ExecuteAsync("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = @UserId AND revoked_at IS NULL", new { UserId = userId });
+    }
+
+    public async Task<Dictionary<string, object>> GetRolePermissionsAsync(string role)
+    {
+        using var conn = CreateConn();
+        var rows = await conn.QueryAsync("SELECT module, admin_perm, cashier_perm, inventory_perm FROM permissions_matrix ORDER BY id");
+        var result = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        var normRole = role?.Trim().ToLowerInvariant() ?? "cashier";
+
+        foreach (var row in rows)
+        {
+            string module = row.module;
+            object perm = normRole switch
+            {
+                "admin" => row.admin_perm,
+                "inventory" or "inventory manager" => row.inventory_perm,
+                _ => row.cashier_perm
+            };
+            result[module] = perm;
+        }
+        return result;
+    }
+
+    // -------------------------------------------------------------
+    // WhatsApp Outbox & Retry Engine
+    // -------------------------------------------------------------
+    public async Task EnqueueWhatsAppMessageAsync(string invoiceId, string mobileNumber, string messageText, IDbTransaction? tx = null)
+    {
+        var sql = @"
+            INSERT INTO whatsapp_outbox (invoice_id, mobile_number, message_text, status)
+            VALUES (@InvoiceId, @Mobile, @Msg, 'PENDING');
+        ";
+        var param = new { InvoiceId = invoiceId, Mobile = mobileNumber, Msg = messageText };
+        if (tx != null)
+        {
+            await tx.Connection!.ExecuteAsync(sql, param, transaction: tx);
+        }
+        else
+        {
+            using var conn = CreateConn();
+            await conn.ExecuteAsync(sql, param);
+        }
+    }
+
+    public async Task<IEnumerable<WhatsAppOutboxItem>> GetPendingWhatsAppMessagesAsync(int limit = 20)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            SELECT id as Id, invoice_id as InvoiceId, mobile_number as MobileNumber,
+                   message_text as MessageText, status as Status, retry_count as RetryCount,
+                   last_error as LastError, created_at as CreatedAt, processed_at as ProcessedAt
+            FROM whatsapp_outbox
+            WHERE status = 'PENDING' AND retry_count < 5
+            ORDER BY created_at ASC
+            LIMIT @Limit;
+        ";
+        return await conn.QueryAsync<WhatsAppOutboxItem>(sql, new { Limit = limit });
+    }
+
+    public async Task UpdateWhatsAppOutboxStatusAsync(long id, string status, string? error = null)
+    {
+        using var conn = CreateConn();
+        var sql = @"
+            UPDATE whatsapp_outbox
+            SET status = @Status,
+                retry_count = retry_count + 1,
+                last_error = @Error,
+                processed_at = NOW()
+            WHERE id = @Id;
+        ";
+        await conn.ExecuteAsync(sql, new { Id = id, Status = status, Error = error });
     }
 }

@@ -270,19 +270,27 @@ export default function InvoiceDetail() {
 
         {/* Store Tax Header & Document Title */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
-          <Box sx={{ maxWidth: 520 }}>
-            <Typography variant="h3" sx={{ fontWeight: 800, color: '#1F2937' }}>
-              {invoice.Store?.Name || invoice.StoreName || 'DailyMart Express'}
-            </Typography>
-            <Typography variant="body2" sx={{ color: '#4B5563', mt: 0.5 }}>
-              {invoice.Store?.Address || invoice.StoreAddress || 'Plot 12, Commercial Hub, MG Road, Mumbai, Maharashtra 400001'}
-            </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: '#1F2937', mt: 0.5 }}>
-              GSTIN: {invoice.Store?.GstNumber || invoice.StoreGst || '27AABCU9603R1ZM'} | FSSAI: {invoice.Store?.FoodLicenseNumber || invoice.StoreFssai || '11522001000123'}
-            </Typography>
-            <Typography variant="body2" sx={{ color: '#4B5563' }}>
-              State: {invoice.Store?.State || 'Maharashtra'} (Code: 27) | Email: {invoice.Store?.Email || 'billing@dailymart.in'}
-            </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, maxWidth: 540 }}>
+            <Box
+              component="img"
+              src="/favicon.svg"
+              alt="Logo"
+              sx={{ width: 52, height: 52, borderRadius: 2, objectFit: 'contain', flexShrink: 0 }}
+            />
+            <Box>
+              <Typography variant="h3" sx={{ fontWeight: 800, color: '#1F2937' }}>
+                {invoice.Store?.Name || invoice.StoreName || 'DailyMart Express'}
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#4B5563', mt: 0.5 }}>
+                {invoice.Store?.Address || invoice.StoreAddress || 'Plot 12, Commercial Hub, MG Road, Mumbai, Maharashtra 400001'}
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: '#1F2937', mt: 0.5 }}>
+                GSTIN: {invoice.Store?.GstNumber || invoice.StoreGst || '27AABCU9603R1ZM'} | FSSAI: {invoice.Store?.FoodLicenseNumber || invoice.StoreFssai || '11522001000123'}
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#4B5563' }}>
+                State: {invoice.Store?.State || 'Maharashtra'} (Code: 27) | Email: {invoice.Store?.Email || 'billing@dailymart.in'}
+              </Typography>
+            </Box>
           </Box>
 
           <Box sx={{ textAlign: { xs: 'left', sm: 'right' } }}>

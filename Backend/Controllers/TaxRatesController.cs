@@ -1,11 +1,12 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize]
 [Route("api/tax-rates")]
-public class TaxRatesController : ControllerBase
+public class TaxRatesController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -21,11 +22,12 @@ public class TaxRatesController : ControllerBase
         return Ok(list);
     }
 
+    [Authorize(Roles = "Admin,admin")]
     [HttpPost]
     public async Task<IActionResult> CreateTaxRate([FromBody] PosBackend.Models.TaxRate rate)
     {
         if (string.IsNullOrWhiteSpace(rate.Name))
-            return BadRequest(new { status = "error", message = "Name is required" });
+            return BadRequest(new { status = "error", message = "Name is required." });
 
         var created = await _db.CreateTaxRateAsync(rate);
         return StatusCode(201, created);

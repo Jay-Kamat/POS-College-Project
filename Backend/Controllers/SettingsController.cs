@@ -1,12 +1,13 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize(Roles = "Admin,admin")]
 [Route("api/[controller]")]
-public class SettingsController : ControllerBase
+public class SettingsController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -18,7 +19,8 @@ public class SettingsController : ControllerBase
     [HttpGet("store-profile")]
     public async Task<IActionResult> GetStoreProfile([FromQuery] string? storeId)
     {
-        var store = await _db.GetStoreProfileAsync(storeId);
+        var targetStoreId = ResolveStoreId(storeId);
+        var store = await _db.GetStoreProfileAsync(targetStoreId);
         return Ok(store);
     }
 

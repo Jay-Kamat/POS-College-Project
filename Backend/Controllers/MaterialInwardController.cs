@@ -1,13 +1,14 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize(Roles = "Admin,admin,Inventory,inventory,Inventory Manager")]
 [Route("api/material-inward")]
 [Route("api/material_inward")]
-public class MaterialInwardController : ControllerBase
+public class MaterialInwardController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -16,19 +17,26 @@ public class MaterialInwardController : ControllerBase
         _db = db;
     }
 
-    private string? ResolveStoreId(string? queryStoreId)
-    {
-        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
-        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
-        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
-    }
-
     [HttpGet]
-    public async Task<IActionResult> GetMaterialInward([FromQuery] string? storeId)
+    public async Task<IActionResult> GetMaterialInward(
+        [FromQuery] string? storeId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
     {
         var targetStoreId = ResolveStoreId(storeId);
-        var list = await _db.GetMaterialInwardAsync(targetStoreId);
-        return Ok(list);
+        var list = (await _db.GetMaterialInwardAsync(targetStoreId)).ToList();
+        
+        var totalCount = list.Count;
+        var pagedItems = list.Skip((Math.Max(1, page) - 1) * Math.Max(1, pageSize)).Take(Math.Max(1, pageSize)).ToList();
+
+        return Ok(new {
+            status = "success",
+            count = totalCount,
+            pageNumber = page,
+            pageSize = pageSize,
+            totalPages = (int)Math.Ceiling((double)totalCount / Math.Max(1, pageSize)),
+            data = pagedItems
+        });
     }
 
     [HttpGet("stats")]
@@ -55,16 +63,13 @@ public class MaterialInwardController : ControllerBase
         try
         {
             var targetStoreId = ResolveStoreId(null);
-            var created = await _db.CreateMaterialInwardAsync(body, targetStoreId);
+            var userId = GetCurrentUserId();
+            var created = await _db.CreateMaterialInwardAsync(body, targetStoreId, userId);
             return StatusCode(201, created);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { status = "error", message = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { status = "error", message = ex.Message });
         }
     }
 }

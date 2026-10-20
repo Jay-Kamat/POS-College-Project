@@ -1,12 +1,13 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize(Roles = "Admin,admin,Inventory,inventory,Inventory Manager")]
 [Route("api/[controller]")]
-public class VendorsController : ControllerBase
+public class VendorsController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -16,10 +17,23 @@ public class VendorsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetVendors([FromQuery] string? search)
+    public async Task<IActionResult> GetVendors(
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
     {
         var list = (await _db.GetVendorsAsync(search)).ToList();
-        return Ok(list);
+        var totalCount = list.Count;
+        var pagedItems = list.Skip((Math.Max(1, page) - 1) * Math.Max(1, pageSize)).Take(Math.Max(1, pageSize)).ToList();
+
+        return Ok(new {
+            status = "success",
+            count = totalCount,
+            pageNumber = page,
+            pageSize = pageSize,
+            totalPages = (int)Math.Ceiling((double)totalCount / Math.Max(1, pageSize)),
+            data = pagedItems
+        });
     }
 
     [HttpGet("stats")]

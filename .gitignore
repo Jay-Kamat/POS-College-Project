@@ -43,6 +43,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # .NET & C# Build Artifacts
+Backend.NodeBackup/
 **/bin/
 **/obj/
 *.user
@@ -64,3 +65,7 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# Local Backups
+backups/
+*.dump

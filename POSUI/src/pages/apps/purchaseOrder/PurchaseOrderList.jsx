@@ -1073,19 +1073,27 @@ export default function PurchaseOrderList() {
             <Box id="printable-po-document" sx={{ bgcolor: '#FFFFFF' }}>
               {/* Company Header */}
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 3 }}>
-                <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 900, color: '#1E293B', letterSpacing: '-0.5px' }}>
-                    RETAILPOS SUPERMARKET PVT LTD
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Central Distribution & Logistics Hub, Andheri East
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Mumbai, Maharashtra 400069 | GSTIN: 27AABCR1234F1Z9
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Email: procurement@retailpos.com | Ph: +91 (022) 555-0199
-                  </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Box
+                    component="img"
+                    src="/favicon.svg"
+                    alt="Logo"
+                    sx={{ width: 48, height: 48, borderRadius: 2, objectFit: 'contain', flexShrink: 0 }}
+                  />
+                  <Box>
+                    <Typography variant="h5" sx={{ fontWeight: 900, color: '#1E293B', letterSpacing: '-0.5px' }}>
+                      RETAILPOS SUPERMARKET PVT LTD
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Central Distribution & Logistics Hub, Andheri East
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Mumbai, Maharashtra 400069 | GSTIN: 27AABCR1234F1Z9
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Email: procurement@retailpos.com | Ph: +91 (022) 555-0199
+                    </Typography>
+                  </Box>
                 </Box>
                 <Box sx={{ textAlign: 'right' }}>
                   <Typography variant="h4" sx={{ fontWeight: 800, color: '#4361EE', fontFamily: 'monospace' }}>

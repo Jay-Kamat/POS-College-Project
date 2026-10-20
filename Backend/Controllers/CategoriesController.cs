@@ -1,12 +1,13 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize]
 [Route("api/[controller]")]
-public class CategoriesController : ControllerBase
+public class CategoriesController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -22,11 +23,12 @@ public class CategoriesController : ControllerBase
         return Ok(list);
     }
 
+    [Authorize(Roles = "Admin,admin,Inventory,inventory,Inventory Manager")]
     [HttpPost]
     public async Task<IActionResult> CreateCategory([FromBody] Category cat)
     {
         if (string.IsNullOrWhiteSpace(cat.Name))
-            return BadRequest(new { status = "error", message = "Category Name is required" });
+            return BadRequest(new { status = "error", message = "Category Name is required." });
 
         var created = await _db.CreateCategoryAsync(cat.Name);
         return StatusCode(201, created);

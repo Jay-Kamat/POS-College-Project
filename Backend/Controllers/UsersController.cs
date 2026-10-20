@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
@@ -17,9 +18,9 @@ public class UpdateRoleRequest
     public string Role { get; set; } = "Cashier";
 }
 
-[ApiController]
+[Authorize(Roles = "Admin,admin")]
 [Route("api/[controller]")]
-public class UsersController : ControllerBase
+public class UsersController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -29,10 +30,20 @@ public class UsersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetUsers()
+    public async Task<IActionResult> GetUsers([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
         var users = (await _db.GetUsersAsync()).ToList();
-        return Ok(users);
+        var totalCount = users.Count;
+        var pagedItems = users.Skip((Math.Max(1, page) - 1) * Math.Max(1, pageSize)).Take(Math.Max(1, pageSize)).ToList();
+
+        return Ok(new {
+            status = "success",
+            count = totalCount,
+            pageNumber = page,
+            pageSize = pageSize,
+            totalPages = (int)Math.Ceiling((double)totalCount / Math.Max(1, pageSize)),
+            data = pagedItems
+        });
     }
 
     [HttpGet("stats")]
@@ -46,7 +57,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> CreateUser([FromBody] UserDto user)
     {
         if (string.IsNullOrWhiteSpace(user.Name) || string.IsNullOrWhiteSpace(user.Email))
-            return BadRequest(new { status = "error", message = "Name and Email are required" });
+            return BadRequest(new { status = "error", message = "Name and Email are required." });
 
         var created = await _db.CreateUserAsync(user);
         return StatusCode(201, created);
@@ -70,7 +81,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> DeleteUser(string id)
     {
         await _db.DeleteUserAsync(id);
-        return Ok(new { status = "success", message = "User deleted" });
+        return Ok(new { status = "success", message = "User deleted successfully." });
     }
 
     [HttpGet("permissions-matrix")]

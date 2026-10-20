@@ -1,24 +1,18 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize]
 [Route("api/[controller]")]
-public class ReportsController : ControllerBase
+public class ReportsController : BaseApiController
 {
     private readonly PosDbService _db;
 
     public ReportsController(PosDbService db)
     {
         _db = db;
-    }
-
-    private string? ResolveStoreId(string? queryStoreId)
-    {
-        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
-        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
-        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
     }
 
     [HttpGet("kpis")]

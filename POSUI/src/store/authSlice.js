@@ -16,44 +16,80 @@ const getSavedActiveStore = () => {
   };
 };
 
+const getSavedUser = () => {
+  try {
+    const saved = localStorage.getItem('pos_user');
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return null;
+};
+
+const getSavedToken = () => {
+  try {
+    return localStorage.getItem('pos_token') || null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const getSavedPermissions = () => {
+  try {
+    const saved = localStorage.getItem('pos_permissions');
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return [];
+};
+
+const savedUser = getSavedUser();
+const savedToken = getSavedToken();
+
 const initialState = {
-  user: {
-    uid: 'user_admin_01',
-    email: 'admin@dailymart.in',
-    displayName: 'Jay Sharma (Admin)',
-    role: 'Admin', // 'Admin' | 'Store Manager' | 'Cashier' | 'Inventory'
-    storeId: 'store_mum_01',
-    storeName: 'DailyMart Express (Mumbai)'
-  },
+  user: savedUser,
+  token: savedToken,
+  permissions: getSavedPermissions(),
   activeStore: getSavedActiveStore(),
-  isAuthenticated: true,
+  isAuthenticated: Boolean(savedToken && savedUser),
   isLoading: false,
+  error: null
 };
 
 export const authSlice = createSlice({
   name: 'auth',
   initialState,
   reducers: {
+    setAuth: (state, action) => {
+      state.user = action.payload.user;
+      state.token = action.payload.token;
+      state.permissions = action.payload.permissions || [];
+      state.isAuthenticated = true;
+      state.error = null;
+
+      try {
+        localStorage.setItem('pos_token', action.payload.token);
+        if (action.payload.refreshToken) {
+          localStorage.setItem('pos_refresh_token', action.payload.refreshToken);
+        }
+        localStorage.setItem('pos_user', JSON.stringify(action.payload.user));
+        localStorage.setItem('pos_permissions', JSON.stringify(action.payload.permissions || []));
+      } catch (e) {}
+    },
     setUser: (state, action) => {
       state.user = action.payload;
       state.isAuthenticated = !!action.payload;
+      try {
+        if (action.payload) {
+          localStorage.setItem('pos_user', JSON.stringify(action.payload));
+        } else {
+          localStorage.removeItem('pos_user');
+        }
+      } catch (e) {}
     },
     setRole: (state, action) => {
       if (state.user) {
         state.user.role = action.payload;
-        if (action.payload === 'Admin') {
-          state.user.displayName = 'Jay Sharma (Admin)';
-          state.user.email = 'admin@dailymart.in';
-        } else if (action.payload === 'Store Manager') {
-          state.user.displayName = 'Amit Deshmukh (Store Manager)';
-          state.user.email = 'manager.mumbai@dailymart.in';
-        } else if (action.payload === 'Cashier') {
-          state.user.displayName = 'Pooja Nair (Cashier)';
-          state.user.email = 'cashier1@dailymart.in';
-        } else if (action.payload === 'Inventory' || action.payload === 'Inventory Manager') {
-          state.user.displayName = 'Vikram Singh (Inventory)';
-          state.user.email = 'inventory@dailymart.in';
-        }
+        try {
+          localStorage.setItem('pos_user', JSON.stringify(state.user));
+        } catch (e) {}
       }
     },
     setActiveStore: (state, action) => {
@@ -67,10 +103,19 @@ export const authSlice = createSlice({
     },
     logout: (state) => {
       state.user = null;
+      state.token = null;
+      state.permissions = [];
       state.isAuthenticated = false;
+      state.error = null;
+      try {
+        localStorage.removeItem('pos_token');
+        localStorage.removeItem('pos_refresh_token');
+        localStorage.removeItem('pos_user');
+        localStorage.removeItem('pos_permissions');
+      } catch (e) {}
     }
   }
 });
 
-export const { setUser, setRole, setActiveStore, logout } = authSlice.actions;
+export const { setAuth, setUser, setRole, setActiveStore, logout } = authSlice.actions;
 export default authSlice.reducer;

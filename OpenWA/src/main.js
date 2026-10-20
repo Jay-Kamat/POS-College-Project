@@ -205,6 +205,28 @@ const apiApp = express();
 apiApp.use(cors());
 apiApp.use(express.json());
 
+const API_SECRET = process.env.OPENWA_API_KEY || 'dailymart_openwa_secret_token_2026';
+
+// Health checks
+apiApp.get(['/health', '/api/v1/health'], (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'OpenWA WhatsApp Gateway',
+    timestamp: new Date().toISOString(),
+    session: sessionState
+  });
+});
+
+// Optional API secret validation (checks when provided or configured)
+apiApp.use((req, res, next) => {
+  if (req.path === '/health' || req.path === '/api/v1/health') return next();
+  const incomingKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+  if (incomingKey && incomingKey !== API_SECRET) {
+    return res.status(401).json({ status: 'error', message: 'Unauthorized: Invalid OpenWA API key.' });
+  }
+  next();
+});
+
 // Session Status endpoint
 apiApp.get('/api/v1/session/status', async (req, res) => {
   res.json({

@@ -50,9 +50,11 @@ import {
   ChevronLeft as ChevronLeftIcon,
   KeyboardArrowDown as ArrowDownIcon,
   Lock as LockIcon,
-  AddCircleOutline as AddIcon
+  AddCircleOutline as AddIcon,
+  Logout as LogoutIcon
 } from '@mui/icons-material';
-import { setRole, setActiveStore } from '../../store/authSlice';
+import { setRole, setActiveStore, logout } from '../../store/authSlice';
+import { clearAuth } from '../../_api/apiClient';
 import settingService from '../../_api/settingService';
 
 const DRAWER_WIDTH = 250;
@@ -73,7 +75,15 @@ export default function MainLayout() {
   const [open, setOpen] = useState(true);
   const [roleAnchor, setRoleAnchor] = useState(null);
   const [storeAnchor, setStoreAnchor] = useState(null);
+  const [userAnchor, setUserAnchor] = useState(null);
   const [availableStores, setAvailableStores] = useState([]);
+
+  const handleLogout = () => {
+    setUserAnchor(null);
+    dispatch(logout());
+    clearAuth();
+    navigate('/login', { replace: true });
+  };
 
   // Create New Outlet Dialog State
   const [createOutletOpen, setCreateOutletOpen] = useState(false);
@@ -198,20 +208,18 @@ export default function MainLayout() {
             <IconButton edge="start" onClick={handleToggleDrawer} sx={{ color: '#4B5563' }}>
               {open ? <ChevronLeftIcon /> : <MenuIcon />}
             </IconButton>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, cursor: 'pointer' }} onClick={() => navigate('/dashboard')}>
               <Box
+                component="img"
+                src="/favicon.svg"
+                alt="POS Logo"
                 sx={{
-                  bgcolor: '#3B5BDB',
-                  color: 'white',
-                  fontWeight: 700,
-                  px: 1.5,
-                  py: 0.5,
+                  width: 36,
+                  height: 36,
                   borderRadius: 1.5,
-                  fontSize: 16
+                  objectFit: 'contain'
                 }}
-              >
-                POS
-              </Box>
+              />
               <Typography variant="h5" sx={{ fontWeight: 700, color: '#1F2937' }}>
                 DailyMart
               </Typography>
@@ -352,10 +360,37 @@ export default function MainLayout() {
               </MenuItem>
             </Menu>
 
-            {/* User Avatar */}
-            <Avatar sx={{ bgcolor: isAdmin ? '#3B5BDB' : (currentRole === 'Store Manager' ? '#2F9E44' : '#E03131'), width: 36, height: 36, fontSize: 14 }}>
-              {user?.displayName ? user.displayName.charAt(0) : 'J'}
-            </Avatar>
+            {/* User Avatar & Profile / Logout Menu */}
+            <Tooltip title={`${user?.displayName || 'User'} (${currentRole})`}>
+              <IconButton onClick={(e) => setUserAnchor(e.currentTarget)} sx={{ p: 0 }}>
+                <Avatar sx={{ bgcolor: isAdmin ? '#3B5BDB' : (currentRole === 'Store Manager' ? '#2F9E44' : '#E03131'), width: 36, height: 36, fontSize: 14 }}>
+                  {user?.displayName ? user.displayName.charAt(0) : 'U'}
+                </Avatar>
+              </IconButton>
+            </Tooltip>
+            <Menu
+              anchorEl={userAnchor}
+              open={Boolean(userAnchor)}
+              onClose={() => setUserAnchor(null)}
+              PaperProps={{ sx: { width: 230, p: 0.5, borderRadius: 2 } }}
+            >
+              <Box sx={{ px: 2, py: 1 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1F2937' }}>
+                  {user?.displayName || 'Active Staff'}
+                </Typography>
+                <Typography variant="caption" sx={{ color: '#6B7280', display: 'block', wordBreak: 'break-all' }}>
+                  {user?.email || 'user@dailymart.in'}
+                </Typography>
+                <Chip label={currentRole} size="small" color="primary" sx={{ mt: 0.8, height: 20, fontSize: 10, fontWeight: 700 }} />
+              </Box>
+              <Divider sx={{ my: 0.5 }} />
+              <MenuItem onClick={handleLogout} sx={{ color: '#E03131', fontWeight: 600 }}>
+                <ListItemIcon sx={{ color: '#E03131', minWidth: 28 }}>
+                  <LogoutIcon fontSize="small" />
+                </ListItemIcon>
+                Sign Out
+              </MenuItem>
+            </Menu>
           </Box>
         </Toolbar>
       </AppBar>
@@ -427,6 +462,41 @@ export default function MainLayout() {
                 </ListItem>
               );
             })}
+          </List>
+
+          {/* Sign Out Option at Drawer Bottom */}
+          <Divider sx={{ my: 1 }} />
+          <List sx={{ px: 1 }}>
+            <ListItem disablePadding sx={{ display: 'block' }}>
+              <ListItemButton
+                onClick={handleLogout}
+                sx={{
+                  minHeight: 44,
+                  justifyContent: open ? 'initial' : 'center',
+                  px: 2,
+                  borderRadius: 2,
+                  color: '#E03131',
+                  '&:hover': { bgcolor: '#FFF5F5' }
+                }}
+              >
+                <ListItemIcon
+                  sx={{
+                    minWidth: 0,
+                    mr: open ? 2 : 'auto',
+                    justifyContent: 'center',
+                    color: '#E03131'
+                  }}
+                >
+                  <LogoutIcon />
+                </ListItemIcon>
+                {open && (
+                  <ListItemText
+                    primary="Sign Out"
+                    primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }}
+                  />
+                )}
+              </ListItemButton>
+            </ListItem>
           </List>
         </Box>
       </Drawer>

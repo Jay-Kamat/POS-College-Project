@@ -580,8 +580,8 @@ export default function SettingsPage() {
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <Avatar sx={{ bgcolor: '#16A34A', width: 42, height: 42 }}>
-                    <StoreIcon sx={{ color: 'white' }} />
+                  <Avatar src="/favicon.svg" sx={{ bgcolor: '#FFFFFF', width: 42, height: 42, p: 0.5, border: '1px solid #BBF7D0' }}>
+                    <StoreIcon sx={{ color: '#16A34A' }} />
                   </Avatar>
                   <Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -628,13 +628,16 @@ export default function SettingsPage() {
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                 <Avatar
+                  src="/favicon.svg"
                   sx={{
-                    bgcolor: '#2563EB',
+                    bgcolor: '#FFFFFF',
                     width: 56,
                     height: 56,
                     fontSize: '1.4rem',
                     fontWeight: 800,
-                    boxShadow: '0 4px 12px rgba(37,99,235,0.4)'
+                    p: 0.5,
+                    boxShadow: '0 4px 12px rgba(37,99,235,0.4)',
+                    border: '2px solid rgba(255,255,255,0.2)'
                   }}
                 >
                   {(profile.Name || 'DM').slice(0, 2).toUpperCase()}
@@ -987,6 +990,12 @@ export default function SettingsPage() {
                   }}
                 >
                   <Box sx={{ textAlign: 'center', mb: 1.5 }}>
+                    <Box
+                      component="img"
+                      src="/favicon.svg"
+                      alt="Logo"
+                      sx={{ width: 28, height: 28, borderRadius: 1, mb: 0.5, objectFit: 'contain' }}
+                    />
                     <Typography variant="subtitle2" sx={{ fontWeight: 800, fontFamily: 'monospace' }}>
                       {profile.Name.toUpperCase()}
                     </Typography>

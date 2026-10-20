@@ -1,12 +1,13 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize]
 [Route("api/[controller]")]
-public class StoresController : ControllerBase
+public class StoresController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -25,7 +26,8 @@ public class StoresController : ControllerBase
     [HttpGet("profile")]
     public async Task<IActionResult> GetStoreProfile([FromQuery] string? storeId)
     {
-        var store = await _db.GetStoreProfileAsync(storeId);
+        var targetStoreId = ResolveStoreId(storeId);
+        var store = await _db.GetStoreProfileAsync(targetStoreId);
         return Ok(store);
     }
 
@@ -36,6 +38,7 @@ public class StoresController : ControllerBase
         return Ok(store);
     }
 
+    [Authorize(Roles = "Admin,admin")]
     [HttpPost]
     public async Task<IActionResult> CreateStore([FromBody] Store store)
     {
@@ -43,6 +46,7 @@ public class StoresController : ControllerBase
         return Ok(created);
     }
 
+    [Authorize(Roles = "Admin,admin")]
     [HttpPut("profile")]
     public async Task<IActionResult> UpdateStoreProfile([FromBody] Store store)
     {
@@ -50,6 +54,7 @@ public class StoresController : ControllerBase
         return Ok(updated);
     }
 
+    [Authorize(Roles = "Admin,admin")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateStoreById(string id, [FromBody] Store store)
     {

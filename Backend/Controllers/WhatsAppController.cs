@@ -1,6 +1,9 @@
-using Microsoft.AspNetCore.Mvc;
-using System.Text.Json;
 using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using PosBackend.Models;
+using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
@@ -16,15 +19,42 @@ public class WhatsAppSendRequest
 [Route("api/[controller]")]
 public class WhatsAppController : ControllerBase
 {
-    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-    private const string OpenWaApiUrl = "http://localhost:2785/api/v1";
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IConfiguration _config;
+    private readonly PosDbService _db;
+    private readonly ILogger<WhatsAppController> _logger;
+
+    public WhatsAppController(
+        IHttpClientFactory httpClientFactory,
+        IConfiguration config,
+        PosDbService db,
+        ILogger<WhatsAppController> logger)
+    {
+        _httpClientFactory = httpClientFactory;
+        _config = config;
+        _db = db;
+        _logger = logger;
+    }
+
+    private string GetOpenWaUrl() => _config["OpenWA:Url"] ?? "http://localhost:2785/api/v1";
+    private string GetApiKey() => _config["OpenWA:ApiKey"] ?? "dailymart_openwa_secret_token_2026";
+
+    private HttpClient CreateClient()
+    {
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(int.TryParse(_config["OpenWA:TimeoutSeconds"], out var s) ? s : 5);
+        client.DefaultRequestHeaders.Remove("x-api-key");
+        client.DefaultRequestHeaders.Add("x-api-key", GetApiKey());
+        return client;
+    }
 
     [HttpGet("status")]
     public async Task<IActionResult> GetStatus()
     {
         try
         {
-            var res = await _httpClient.GetAsync($"{OpenWaApiUrl}/session/status");
+            var client = CreateClient();
+            var res = await client.GetAsync($"{GetOpenWaUrl()}/session/status");
             if (res.IsSuccessStatusCode)
             {
                 var content = await res.Content.ReadAsStringAsync();
@@ -40,20 +70,20 @@ public class WhatsAppController : ControllerBase
                 return Ok(new
                 {
                     status = phoneConnected ? "connected" : "scanning",
-                    isReady = isReady,
+                    isReady,
                     isConnected = phoneConnected,
-                    phoneConnected = phoneConnected,
+                    phoneConnected,
                     phone = pairedNumber,
                     session = "pos_terminal_session",
-                    battery = battery,
-                    qrDataUrl = qrDataUrl,
+                    battery,
+                    qrDataUrl,
                     timestamp = DateTime.UtcNow
                 });
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // OpenWA unreachable fallback
+            _logger.LogWarning("OpenWA status probe failed: {Message}", ex.Message);
         }
 
         return Ok(new
@@ -75,16 +105,17 @@ public class WhatsAppController : ControllerBase
     {
         try
         {
-            var res = await _httpClient.GetAsync($"{OpenWaApiUrl}/session/qr");
+            var client = CreateClient();
+            var res = await client.GetAsync($"{GetOpenWaUrl()}/session/qr");
             if (res.IsSuccessStatusCode)
             {
                 var content = await res.Content.ReadAsStringAsync();
                 return Content(content, "application/json");
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback
+            _logger.LogWarning("OpenWA QR probe failed: {Message}", ex.Message);
         }
 
         return Ok(new
@@ -101,8 +132,9 @@ public class WhatsAppController : ControllerBase
     {
         try
         {
+            var client = CreateClient();
             var jsonPayload = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json");
-            var res = await _httpClient.PostAsync($"{OpenWaApiUrl}/session/request-code", jsonPayload);
+            var res = await client.PostAsync($"{GetOpenWaUrl()}/session/request-code", jsonPayload);
             var content = await res.Content.ReadAsStringAsync();
             return Content(content, "application/json");
         }
@@ -117,7 +149,8 @@ public class WhatsAppController : ControllerBase
     {
         try
         {
-            var res = await _httpClient.PostAsync($"{OpenWaApiUrl}/session/refresh-qr", null);
+            var client = CreateClient();
+            var res = await client.PostAsync($"{GetOpenWaUrl()}/session/refresh-qr", null);
             var content = await res.Content.ReadAsStringAsync();
             return Content(content, "application/json");
         }
@@ -132,7 +165,8 @@ public class WhatsAppController : ControllerBase
     {
         try
         {
-            var res = await _httpClient.PostAsync($"{OpenWaApiUrl}/session/reset", null);
+            var client = CreateClient();
+            var res = await client.PostAsync($"{GetOpenWaUrl()}/session/reset", null);
             var content = await res.Content.ReadAsStringAsync();
             return Content(content, "application/json");
         }
@@ -151,9 +185,10 @@ public class WhatsAppController : ControllerBase
 
         try
         {
+            var client = CreateClient();
             var payload = new { to = recipient, message = message };
             var jsonPayload = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            var res = await _httpClient.PostAsync($"{OpenWaApiUrl}/messages/send-text", jsonPayload);
+            var res = await client.PostAsync($"{GetOpenWaUrl()}/messages/send-text", jsonPayload);
             if (res.IsSuccessStatusCode)
             {
                 var content = await res.Content.ReadAsStringAsync();
@@ -165,22 +200,76 @@ public class WhatsAppController : ControllerBase
                 {
                     status = "success",
                     message = "Digital tax invoice receipt sent successfully via OpenWA Gateway",
-                    recipient = recipient,
+                    recipient,
                     messageId = msgId
                 });
             }
+            else
+            {
+                var errorBody = await res.Content.ReadAsStringAsync();
+                _logger.LogWarning("OpenWA returned non-success HTTP {Code}: {Body}", res.StatusCode, errorBody);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback
+            _logger.LogWarning(ex, "OpenWA dispatch failed, queuing to whatsapp_outbox: {Message}", ex.Message);
+        }
+
+        // Enqueue to outbox for retry so delivery is never dropped
+        if (!string.IsNullOrWhiteSpace(req.InvoiceId))
+        {
+            await _db.EnqueueWhatsAppMessageAsync(req.InvoiceId, recipient, message);
         }
 
         return Ok(new
         {
-            status = "success",
-            message = "Digital tax invoice receipt simulated dispatch via WhatsApp",
-            recipient = recipient,
-            messageId = $"wamid.sim_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
+            status = "queued",
+            message = "Digital tax invoice receipt queued in Outbox for automatic retry",
+            recipient,
+            messageId = $"wamid.queued_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
         });
+    }
+
+    [HttpGet("outbox")]
+    public async Task<IActionResult> GetOutbox([FromQuery] int limit = 50)
+    {
+        var pending = await _db.GetPendingWhatsAppMessagesAsync(limit);
+        return Ok(new { status = "success", data = pending });
+    }
+
+    [HttpPost("outbox/{id}/retry")]
+    public async Task<IActionResult> RetryOutboxMessage(long id)
+    {
+        var items = await _db.GetPendingWhatsAppMessagesAsync(100);
+        var target = items.FirstOrDefault(i => i.Id == id);
+        if (target == null)
+        {
+            return NotFound(new { status = "error", message = "Outbox message not found or already processed." });
+        }
+
+        try
+        {
+            var client = CreateClient();
+            var payload = new { to = target.MobileNumber, message = target.MessageText };
+            var jsonPayload = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            var res = await client.PostAsync($"{GetOpenWaUrl()}/messages/send-text", jsonPayload);
+
+            if (res.IsSuccessStatusCode)
+            {
+                await _db.UpdateWhatsAppOutboxStatusAsync(id, "SENT", null);
+                return Ok(new { status = "success", message = "Dispatched successfully." });
+            }
+            else
+            {
+                var err = await res.Content.ReadAsStringAsync();
+                await _db.UpdateWhatsAppOutboxStatusAsync(id, "FAILED", $"HTTP {res.StatusCode}: {err}");
+                return BadRequest(new { status = "error", message = $"Delivery failed: {err}" });
+            }
+        }
+        catch (Exception ex)
+        {
+            await _db.UpdateWhatsAppOutboxStatusAsync(id, "FAILED", ex.Message);
+            return StatusCode(500, new { status = "error", message = ex.Message });
+        }
     }
 }

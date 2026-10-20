@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pos_billing_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: pos_billing_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-root}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./Backend/Database/schema_full.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pos_billing_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
+    container_name: pos_billing_backend
+    restart: always
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=pos_billing_db;Username=postgres;Password=${DB_PASSWORD:-root};Include Error Detail=false;Maximum Pool Size=100;Minimum Pool Size=10;Connection Lifetime=300;
+      - Jwt__Key=${JWT_SECRET:-DailyMart_Super_Secure_Production_Jwt_Secret_Key_2026_Minimum_32_Chars!}
+      - Jwt__Issuer=DailyMartPosApi
+      - Jwt__Audience=DailyMartPosApp
+      - OpenWA__BaseUrl=http://openwa:2785
+      - OpenWA__ApiKey=${OPENWA_API_KEY:-daily_mart_openwa_secret_2026}
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "dotnet --version || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./POSUI
+      dockerfile: Dockerfile
+    container_name: pos_billing_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  openwa:
+    build:
+      context: ./OpenWA
+      dockerfile: Dockerfile
+    container_name: pos_billing_openwa
+    restart: always
+    environment:
+      - PORT=2785
+      - API_SECRET=${OPENWA_API_KEY:-daily_mart_openwa_secret_2026}
+    ports:
+      - "2785:2785"
+    volumes:
+      - openwa_auth:/app/auth_info_baileys
+
+volumes:
+  postgres_data:
+  openwa_auth:

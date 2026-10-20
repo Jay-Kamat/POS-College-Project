@@ -1,25 +1,19 @@
-using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize]
 [Route("api/[controller]")]
-public class BucketsController : ControllerBase
+public class BucketsController : BaseApiController
 {
     private readonly PosDbService _db;
 
     public BucketsController(PosDbService db)
     {
         _db = db;
-    }
-
-    private string? ResolveStoreId(string? queryStoreId)
-    {
-        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
-        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
-        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
     }
 
     [HttpGet]
@@ -42,6 +36,6 @@ public class BucketsController : ControllerBase
     public async Task<IActionResult> DeleteBucket(string id)
     {
         await _db.DeleteBucketAsync(id);
-        return Ok(new { status = "success", message = "Bucket deleted" });
+        return Ok(new { status = "success", message = "Bucket deleted successfully." });
     }
 }

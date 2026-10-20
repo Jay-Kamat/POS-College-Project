@@ -1109,16 +1109,24 @@ export default function MaterialReturnList() {
             <Box id="printable-debit-document" sx={{ bgcolor: '#FFFFFF' }}>
               {/* Header */}
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 3 }}>
-                <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 900, color: '#1E293B', letterSpacing: '-0.5px' }}>
-                    DAILYMART EXPRESS SUPERSTORE
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Central Distribution & Logistics Hub, Andheri East
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Mumbai, Maharashtra 400069 | GSTIN: 27AABCU9603R1ZM
-                  </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Box
+                    component="img"
+                    src="/favicon.svg"
+                    alt="Logo"
+                    sx={{ width: 48, height: 48, borderRadius: 2, objectFit: 'contain', flexShrink: 0 }}
+                  />
+                  <Box>
+                    <Typography variant="h5" sx={{ fontWeight: 900, color: '#1E293B', letterSpacing: '-0.5px' }}>
+                      DAILYMART EXPRESS SUPERSTORE
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Central Distribution & Logistics Hub, Andheri East
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Mumbai, Maharashtra 400069 | GSTIN: 27AABCU9603R1ZM
+                    </Typography>
+                  </Box>
                 </Box>
                 <Box sx={{ textAlign: 'right' }}>
                   <Typography variant="h4" sx={{ fontWeight: 800, color: '#E03131', fontFamily: 'monospace' }}>

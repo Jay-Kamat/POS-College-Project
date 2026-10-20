@@ -225,6 +225,7 @@ export function printThermalReceipt(invoice, options = {}) {
   ${isCancelled ? '<div class="cancelled-badge">*** CANCELLED ***</div>' : ''}
 
   <div class="text-center">
+    <img src="/favicon.svg" alt="Logo" style="width: 34px; height: 34px; margin-bottom: 4px;" />
     <div class="store-name">${invoice.StoreName || 'DailyMart Express'}</div>
     <div class="store-info">${invoice.StoreAddress || 'Plot 12, Commercial Hub, MG Road, Mumbai'}</div>
     <div class="store-info">GSTIN: ${invoice.StoreGst || '27AABCU9603R1ZM'}</div>
@@ -547,8 +548,13 @@ export function printA4Invoice(invoice, options = {}) {
     <table class="header-table">
       <tr>
         <td style="width: 60%;">
-          <div class="store-brand">${invoice.StoreName || 'DailyMart Express'}</div>
-          <div class="store-address">${invoice.StoreAddress || 'Plot 12, Commercial Hub, MG Road, Mumbai, Maharashtra 400001'}</div>
+          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+            <img src="/favicon.svg" alt="Logo" style="width: 44px; height: 44px; border-radius: 8px; object-fit: contain;" />
+            <div>
+              <div class="store-brand">${invoice.StoreName || 'DailyMart Express'}</div>
+              <div class="store-address">${invoice.StoreAddress || 'Plot 12, Commercial Hub, MG Road, Mumbai, Maharashtra 400001'}</div>
+            </div>
+          </div>
           <div class="store-address"><strong>GSTIN:</strong> ${invoice.StoreGst || '27AABCU9603R1ZM'} | <strong>FSSAI:</strong> ${invoice.StoreFssai || '11522001000123'}</div>
           <div class="store-address">State: Maharashtra (Code: 27) | Phone: +91 98765 43210</div>
         </td>
@@ -1123,10 +1129,13 @@ export function printDebitNote(note, options = {}) {
 </head>
 <body>
   <div class="header">
-    <div>
-      <h2 style="margin: 0;">DailyMart Express</h2>
-      <div style="font-size: 11px; color: #4B5563;">Plot 12, Commercial Hub, MG Road, Mumbai</div>
-      <div style="font-size: 11px;">GSTIN: 27AABCU9603R1ZM</div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <img src="/favicon.svg" alt="Logo" style="width: 44px; height: 44px; border-radius: 8px; object-fit: contain;" />
+      <div>
+        <h2 style="margin: 0;">DailyMart Express</h2>
+        <div style="font-size: 11px; color: #4B5563;">Plot 12, Commercial Hub, MG Road, Mumbai</div>
+        <div style="font-size: 11px;">GSTIN: 27AABCU9603R1ZM</div>
+      </div>
     </div>
     <div style="text-align: right;">
       <div class="title">DEBIT NOTE</div>

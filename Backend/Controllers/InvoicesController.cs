@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
@@ -9,22 +11,20 @@ public class CancelInvoiceRequest
     public string? Reason { get; set; }
 }
 
-[ApiController]
+[Authorize]
 [Route("api/[controller]")]
-public class InvoicesController : ControllerBase
+public class InvoicesController : BaseApiController
 {
     private readonly PosDbService _db;
+    private readonly ILogger<InvoicesController> _logger;
 
-    public InvoicesController(PosDbService db)
+    // Idempotency cache to prevent duplicate checkout requests on retry
+    private static readonly ConcurrentDictionary<string, (Invoice Invoice, DateTime Timestamp)> _idempotencyCache = new();
+
+    public InvoicesController(PosDbService db, ILogger<InvoicesController> logger)
     {
         _db = db;
-    }
-
-    private string? ResolveStoreId(string? queryStoreId)
-    {
-        if (!string.IsNullOrWhiteSpace(queryStoreId)) return queryStoreId.Trim();
-        var header = Request.Headers["X-Store-Id"].FirstOrDefault();
-        return !string.IsNullOrWhiteSpace(header) ? header.Trim() : null;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -34,11 +34,25 @@ public class InvoicesController : ControllerBase
         [FromQuery] string? search, 
         [FromQuery] int? paymentMode, 
         [FromQuery] string? status,
-        [FromQuery] string? storeId)
+        [FromQuery] string? storeId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
     {
         var targetStoreId = ResolveStoreId(storeId);
         var list = (await _db.GetInvoicesAsync(startDate, endDate, search, paymentMode, status, targetStoreId)).ToList();
-        return Ok(new { status = "success", count = list.Count, data = list });
+        
+        // Pagination
+        var totalCount = list.Count;
+        var pagedItems = list.Skip((Math.Max(1, page) - 1) * Math.Max(1, pageSize)).Take(Math.Max(1, pageSize)).ToList();
+
+        return Ok(new { 
+            status = "success", 
+            count = totalCount, 
+            pageNumber = page,
+            pageSize = pageSize,
+            totalPages = (int)Math.Ceiling((double)totalCount / Math.Max(1, pageSize)),
+            data = pagedItems 
+        });
     }
 
     [HttpGet("stats")]
@@ -63,22 +77,52 @@ public class InvoicesController : ControllerBase
     public async Task<IActionResult> CreateInvoice([FromBody] CreateInvoiceRequest req)
     {
         if (req?.Cart == null || req.Cart.Items == null || req.Cart.Items.Count == 0)
-            return BadRequest(new { status = "error", message = "Cannot generate invoice for an empty cart" });
+            return BadRequest(new { status = "error", message = "Cannot generate invoice for an empty cart." });
 
-        var targetStoreId = ResolveStoreId(null);
-        if (req.ActiveStore == null && !string.IsNullOrWhiteSpace(targetStoreId))
+        // Idempotency Key check
+        var idempotencyKey = req.IdempotencyKey ?? Request.Headers["X-Idempotency-Key"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            if (_idempotencyCache.TryGetValue(idempotencyKey, out var cached) && cached.Timestamp > DateTime.UtcNow.AddMinutes(-15))
+            {
+                _logger.LogInformation("Returning idempotent response for key {Key}, invoice {Invoice}", idempotencyKey, cached.Invoice.DocumentNumber);
+                return Ok(new { status = "success", message = "Duplicate request detected; returned cached transaction.", data = cached.Invoice });
+            }
+        }
+
+        var targetStoreId = ResolveStoreId(req.ActiveStore?.Id);
+        if (req.ActiveStore == null)
         {
             req.ActiveStore = new Store { Id = targetStoreId };
         }
-        else if (req.ActiveStore != null && string.IsNullOrWhiteSpace(req.ActiveStore.Id) && !string.IsNullOrWhiteSpace(targetStoreId))
+        else
         {
             req.ActiveStore.Id = targetStoreId;
         }
 
         try
         {
-            var created = await _db.CreateInvoiceAsync(req.Cart, req.ActiveStore);
+            var userId = GetCurrentUserId();
+            var created = await _db.CreateInvoiceAsync(req.Cart, req.ActiveStore, userId);
+
+            if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            {
+                _idempotencyCache[idempotencyKey] = (created, DateTime.UtcNow);
+            }
+
             return StatusCode(201, new { status = "success", data = created });
+        }
+        catch (InsufficientStockException ex)
+        {
+            _logger.LogWarning("Checkout conflict: {Message}", ex.Message);
+            return StatusCode(409, new {
+                status = "error",
+                title = "Insufficient Stock",
+                message = ex.Message,
+                product = ex.ProductName,
+                available = ex.AvailableQuantity,
+                requested = ex.RequestedQuantity
+            });
         }
         catch (InvalidOperationException ex)
         {
@@ -89,10 +133,17 @@ public class InvoicesController : ControllerBase
     [HttpPost("{id}/cancel")]
     public async Task<IActionResult> CancelInvoice(string id, [FromBody] CancelInvoiceRequest? req)
     {
-        var cancelled = await _db.CancelInvoiceAsync(id, req?.Reason);
+        var role = GetCurrentUserRole().ToLowerInvariant();
+        if (role == "cashier")
+        {
+            return StatusCode(403, new { status = "error", message = "Cashier role is not permitted to cancel invoices. Manager or Admin approval required." });
+        }
+
+        var userId = GetCurrentUserId();
+        var cancelled = await _db.CancelInvoiceAsync(id, req?.Reason, userId);
         if (cancelled == null)
             return NotFound(new { status = "error", message = "Invoice not found" });
 
-        return Ok(new { status = "success", message = "Invoice soft cancelled successfully", data = cancelled });
+        return Ok(new { status = "success", message = "Invoice cancelled successfully and stock restored.", data = cancelled });
     }
 }

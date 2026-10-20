@@ -1,12 +1,13 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PosBackend.Models;
 using PosBackend.Services;
 
 namespace PosBackend.Controllers;
 
-[ApiController]
+[Authorize]
 [Route("api/[controller]")]
-public class CustomersController : ControllerBase
+public class CustomersController : BaseApiController
 {
     private readonly PosDbService _db;
 
@@ -16,10 +17,23 @@ public class CustomersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetCustomers([FromQuery] string? search)
+    public async Task<IActionResult> GetCustomers(
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
     {
         var list = (await _db.GetCustomersAsync(search)).ToList();
-        return Ok(new { status = "success", count = list.Count, data = list });
+        var totalCount = list.Count;
+        var pagedItems = list.Skip((Math.Max(1, page) - 1) * Math.Max(1, pageSize)).Take(Math.Max(1, pageSize)).ToList();
+
+        return Ok(new { 
+            status = "success", 
+            count = totalCount, 
+            pageNumber = page,
+            pageSize = pageSize,
+            totalPages = (int)Math.Ceiling((double)totalCount / Math.Max(1, pageSize)),
+            data = pagedItems 
+        });
     }
 
     [HttpGet("stats")]
@@ -61,7 +75,10 @@ public class CustomersController : ControllerBase
     public async Task<IActionResult> CreateCustomer([FromBody] Customer customer)
     {
         if (string.IsNullOrWhiteSpace(customer.Name) || string.IsNullOrWhiteSpace(customer.MobileNumber))
-            return BadRequest(new { status = "error", message = "Name and MobileNumber are required" });
+            return BadRequest(new { status = "error", message = "Name and MobileNumber are required." });
+
+        if (string.IsNullOrWhiteSpace(customer.StoreId))
+            customer.StoreId = ResolveStoreId(null);
 
         var created = await _db.CreateCustomerAsync(customer);
         return StatusCode(201, new { status = "success", data = created });

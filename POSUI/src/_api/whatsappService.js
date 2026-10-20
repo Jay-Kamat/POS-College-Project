@@ -1,8 +1,5 @@
 import apiClient from './apiClient';
 
-// WhatsApp Gateway Integration Service Layer
-const OPENWA_URL = import.meta.env.VITE_OPENWA_API_URL || 'http://localhost:2785/api/v1';
-
 export const whatsappService = {
   checkStatus: async () => {
     try {
@@ -12,30 +9,14 @@ export const whatsappService = {
           isReady: Boolean(data.isReady),
           isConnected: Boolean(data.isConnected || data.phoneConnected),
           phoneConnected: Boolean(data.phoneConnected || data.isConnected),
-          pairedNumber: data.phone || null,
+          pairedNumber: data.phone || data.pairedNumber || null,
           batteryPercent: data.battery ? parseInt(data.battery, 10) : 98,
           qrDataUrl: data.qrDataUrl || null,
           lastMessageSent: data.lastMessageSent || null
         };
       }
     } catch (e) {
-      try {
-        const res = await fetch(`${OPENWA_URL}/session/status`);
-        if (res.ok) {
-          const json = await res.json();
-          return {
-            isReady: Boolean(json.isReady),
-            isConnected: Boolean(json.phoneConnected),
-            phoneConnected: Boolean(json.phoneConnected),
-            pairedNumber: json.pairedNumber || null,
-            batteryPercent: json.batteryPercent ?? 98,
-            qrDataUrl: json.qrDataUrl || null,
-            lastMessageSent: json.lastMessageSent || null
-          };
-        }
-      } catch (err) {
-        console.warn('OpenWA direct fetch failed:', err.message);
-      }
+      console.warn('WhatsApp status check failed:', e.message);
     }
 
     return {
@@ -53,47 +34,21 @@ export const whatsappService = {
       const data = await apiClient.get('/api/whatsapp/qr');
       if (data && data.qrDataUrl) return data.qrDataUrl;
     } catch (e) {
-      try {
-        const res = await fetch(`${OPENWA_URL}/session/qr`);
-        if (res.ok) {
-          const json = await res.json();
-          if (json.qrDataUrl) return json.qrDataUrl;
-        }
-      } catch (err) {}
+      console.warn('WhatsApp getQrCode failed:', e.message);
     }
     return null;
   },
 
   requestPairingCode: async (phoneNumber) => {
-    try {
-      const res = await apiClient.post('/api/whatsapp/request-code', { phoneNumber });
-      return res;
-    } catch (e) {
-      const response = await fetch(`${OPENWA_URL}/session/request-code`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber })
-      });
-      return await response.json();
-    }
+    return await apiClient.post('/api/whatsapp/request-code', { phoneNumber });
   },
 
   refreshQr: async () => {
-    try {
-      return await apiClient.post('/api/whatsapp/refresh-qr');
-    } catch (e) {
-      const response = await fetch(`${OPENWA_URL}/session/refresh-qr`, { method: 'POST' });
-      return await response.json();
-    }
+    return await apiClient.post('/api/whatsapp/refresh-qr');
   },
 
   resetSession: async () => {
-    try {
-      return await apiClient.post('/api/whatsapp/reset');
-    } catch (e) {
-      const response = await fetch(`${OPENWA_URL}/session/reset`, { method: 'POST' });
-      return await response.json();
-    }
+    return await apiClient.post('/api/whatsapp/reset');
   },
 
   sendTestMessage: async (to, message) => {
@@ -102,26 +57,7 @@ export const whatsappService = {
       to: `+91${formattedPhone.slice(-10)}`,
       message: message || 'DailyMart POS: Test connection successful! WhatsApp gateway is paired & functional.'
     };
-
-    try {
-      const res = await apiClient.post('/api/whatsapp/send', payload);
-      return { success: true, messageId: res.messageId || `wamid.${Date.now()}` };
-    } catch (e) {
-      try {
-        const response = await fetch(`${OPENWA_URL}/messages/send-text`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (response.ok) {
-          const data = await response.json();
-          return { success: true, messageId: data.messageId };
-        }
-      } catch (err) {
-        console.warn('OpenWA test send failed:', err.message);
-      }
-    }
-    return { success: true, messageId: `wamid.sim_${Date.now()}` };
+    return await apiClient.post('/api/whatsapp/send', payload);
   },
 
   sendInvoiceReceipt: async (invoice) => {
@@ -129,7 +65,6 @@ export const whatsappService = {
       return { success: false, reason: 'No mobile number provided' };
     }
 
-    // Format text receipt according to docs/INVOICE_RECEIPT_SPEC.md
     const itemsList = (invoice.Items || []).map((item, idx) => 
       `${idx + 1}. ${item.ProductName} x ${item.Quantity} = ₹${(item.Total || 0).toFixed(2)}`
     ).join('\n');
@@ -155,33 +90,20 @@ ${(invoice.Igst || 0) > 0 ? `IGST: ₹${invoice.Igst.toFixed(2)}\n` : ''}Round-o
 Thank you for shopping with us!
 Visit again: https://dailymart.in`;
 
-    try {
-      const data = await apiClient.post('/api/whatsapp/send', {
-        to: `+91${invoice.MobileNumber}`,
-        message: formattedMessage
-      });
-      return { success: true, messageId: data.messageId };
-    } catch (e) {
-      try {
-        const response = await fetch(`${OPENWA_URL}/messages/send-text`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: `+91${invoice.MobileNumber}`,
-            message: formattedMessage
-          })
-        });
+    return await apiClient.post('/api/whatsapp/send', {
+      to: `+91${invoice.MobileNumber}`,
+      message: formattedMessage,
+      invoiceId: invoice.Id
+    });
+  },
 
-        if (response.ok) {
-          const data = await response.json();
-          return { success: true, messageId: data.messageId };
-        }
-      } catch (err) {
-        console.warn('OpenWA send failed:', err.message);
-      }
-    }
+  getOutboxMessages: async () => {
+    const data = await apiClient.get('/api/whatsapp/outbox');
+    return Array.isArray(data) ? data : [];
+  },
 
-    return { success: true, messageId: `wamid.sim_${Date.now()}` };
+  retryOutboxMessage: async (id) => {
+    return await apiClient.post(`/api/whatsapp/outbox/${id}/retry`);
   }
 };
 
